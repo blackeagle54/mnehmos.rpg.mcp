@@ -144,7 +144,7 @@ async function handleInitialize(input: SessionManageInput, ctx: SessionContext):
         output += RichFormatter.section('Party Members');
         const rows = party.members.map(m => [
             m.character.name,
-            (m.character as any).characterClass || 'Adventurer',
+            (m.character as any).class || (m.character as any).characterClass || 'Adventurer',
             `${m.character.hp}/${m.character.maxHp}`,
             m.role === 'leader' ? '★' : ''
         ]);
