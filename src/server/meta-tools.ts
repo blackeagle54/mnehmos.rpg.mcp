@@ -8,6 +8,7 @@
 import { z } from 'zod';
 import { buildConsolidatedRegistry, getAllConsolidatedToolMetadata, getConsolidatedToolCategories } from './consolidated-registry.js';
 import { ToolMetadata } from './tool-metadata.js';
+import { toolParamShape } from './tool-shape.js';
 
 // === SEARCH_TOOLS ===
 
@@ -193,20 +194,15 @@ export async function handleLoadToolSchema(args: LoadToolSchemaArgs): Promise<{
     };
   }
   
-  // Get the full schema with sessionId extension (handle all Zod types)
-  let fullSchema: any;
+  // Expose the tool's params using the SAME robust extractor as runtime
+  // registration (index.ts) so discovery output and registration can't drift,
+  // and refined/intersection schemas don't collapse to `{}`. (#24)
   const sessionIdExt = { sessionId: z.string().optional().describe('Optional session ID for request tracking') };
-  if (typeof tool.schema.extend === 'function') {
-    fullSchema = tool.schema.extend(sessionIdExt);
-  } else {
-    // Fallback for .omit()/.pick() schemas
-    fullSchema = tool.schema.and(z.object(sessionIdExt));
-  }
-  
+
   return {
     toolName: args.toolName,
     description: tool.metadata.description,
-    inputSchema: fullSchema.shape || {},
+    inputSchema: { ...toolParamShape(tool.schema as z.ZodTypeAny), ...sessionIdExt },
     metadata: tool.metadata,
     note: `Schema loaded successfully. You can now call ${args.toolName} with these parameters.`
   };

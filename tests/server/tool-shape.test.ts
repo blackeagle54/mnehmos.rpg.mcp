@@ -13,6 +13,7 @@ import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
 import { toolParamShape } from '../../src/server/tool-shape.js';
 import { buildConsolidatedRegistry } from '../../src/server/consolidated-registry.js';
+import { handleLoadToolSchema } from '../../src/server/meta-tools.js';
 
 describe('toolParamShape (#24)', () => {
     it('extracts the shape of a plain ZodObject', () => {
@@ -44,5 +45,24 @@ describe('toolParamShape (#24)', () => {
             const shape = toolParamShape(entry.schema as z.ZodTypeAny);
             expect(Object.keys(shape).length, `tool "${name}" exposed no parameters`).toBeGreaterThan(0);
         }
+    });
+
+    it('load_tool_schema exposes the same params as registration — no contract drift (#24)', async () => {
+        // Discovery (load_tool_schema) and runtime registration must extract the
+        // schema identically; both now route through toolParamShape.
+        const registry = buildConsolidatedRegistry();
+        const toolName = 'spatial_manage';
+        const expectedKeys = [
+            ...Object.keys(toolParamShape(registry[toolName].schema as z.ZodTypeAny)),
+            'sessionId',
+        ].sort();
+
+        const result = await handleLoadToolSchema({ toolName } as Parameters<typeof handleLoadToolSchema>[0]);
+        expect('inputSchema' in result).toBe(true);
+        const loadedKeys = Object.keys((result as { inputSchema: Record<string, unknown> }).inputSchema).sort();
+
+        expect(loadedKeys.length).toBeGreaterThan(1); // not just sessionId / not {}
+        expect(loadedKeys).toContain('action');
+        expect(loadedKeys).toEqual(expectedKeys);
     });
 });
