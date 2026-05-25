@@ -22,43 +22,51 @@ export function toolParamShape(schema: z.ZodTypeAny): z.ZodRawShape | null {
 }
 
 function collectShape(schema: unknown, seen: Set<unknown>): z.ZodRawShape | null {
-    if (!schema || typeof schema !== 'object' || seen.has(schema)) return null;
+    if (!schema || typeof schema !== 'object') return null;
+    // `seen` is the current recursion PATH (ancestors), not a global visited set —
+    // so a genuine cycle (a node that is its own ancestor) returns null, while the
+    // same node legitimately reused in a sibling branch is still processed.
+    if (seen.has(schema)) return null;
     seen.add(schema);
+    try {
+        const anySchema = schema as { shape?: z.ZodRawShape; _def?: Record<string, unknown> };
 
-    const anySchema = schema as { shape?: z.ZodRawShape; _def?: Record<string, unknown> };
+        // ZodObject (incl. results of .omit()/.pick()). May legitimately be empty.
+        if (anySchema.shape) return { ...anySchema.shape };
 
-    // ZodObject (incl. results of .omit()/.pick()). May legitimately be empty.
-    if (anySchema.shape) return { ...anySchema.shape };
+        const def = anySchema._def;
+        if (!def) return null;
 
-    const def = anySchema._def;
-    if (!def) return null;
-
-    // ZodIntersection (.and / z.intersection): both sides contribute. A key
-    // present on both can't be flattened without dropping one validator.
-    if (def.left && def.right) {
-        const left = collectShape(def.left, seen);
-        const right = collectShape(def.right, seen);
-        // If a side isn't object-like, the intersection can't be flattened to a
-        // pure param shape. Signal failure (null) so the startup guard rejects it
-        // rather than advertising a partial contract that runtime validation
-        // (which parses the real intersection) would reject anyway.
-        if (left === null || right === null) return null;
-        for (const key of Object.keys(right)) {
-            if (key in left) {
-                throw new Error(
-                    `toolParamShape: intersection defines conflicting key "${key}"; ` +
-                    `cannot flatten to a single MCP param shape.`
-                );
+        // ZodIntersection (.and / z.intersection): both sides contribute. A key
+        // present on both can't be flattened without dropping one validator.
+        if (def.left && def.right) {
+            const left = collectShape(def.left, seen);
+            const right = collectShape(def.right, seen);
+            // If a side isn't object-like, the intersection can't be flattened to a
+            // pure param shape. Signal failure (null) so the startup guard rejects it
+            // rather than advertising a partial contract that runtime validation
+            // (which parses the real intersection) would reject anyway.
+            if (left === null || right === null) return null;
+            for (const key of Object.keys(right)) {
+                if (key in left) {
+                    throw new Error(
+                        `toolParamShape: intersection defines conflicting key "${key}"; ` +
+                        `cannot flatten to a single MCP param shape.`
+                    );
+                }
             }
+            return { ...left, ...right };
         }
-        return { ...left, ...right };
+
+        // ZodEffects (refine/transform/preprocess): params are on the inner schema.
+        if (def.schema) return collectShape(def.schema, seen);
+
+        // ZodOptional/Nullable/Default/etc.: unwrap the wrapped type.
+        if (def.innerType) return collectShape(def.innerType, seen);
+
+        return null;
+    } finally {
+        // Pop this node off the path so sibling-branch reuse isn't seen as a cycle.
+        seen.delete(schema);
     }
-
-    // ZodEffects (refine/transform/preprocess): params are on the inner schema.
-    if (def.schema) return collectShape(def.schema, seen);
-
-    // ZodOptional/Nullable/Default/etc.: unwrap the wrapped type.
-    if (def.innerType) return collectShape(def.innerType, seen);
-
-    return null;
 }

@@ -54,6 +54,16 @@ describe('toolParamShape (#24)', () => {
         expect(toolParamShape(mixed)).toBeNull();
     });
 
+    it('treats a reused schema node across branches as reuse, not a cycle (#24 — CodeRabbit)', () => {
+        // The same object node appears on both sides (directly and via a refine
+        // wrapper). Cycle tracking must be per-path, so both sides resolve to { a }
+        // and the genuine duplicate-key conflict surfaces — instead of the second
+        // occurrence being skipped as a "cycle" and returning a partial shape.
+        const inner = z.object({ a: z.string() });
+        const reused = z.intersection(inner, inner.refine(() => true));
+        expect(() => toolParamShape(reused)).toThrow(/conflicting key/i);
+    });
+
     it('every consolidated tool exposes a non-empty parameter shape', () => {
         const registry = buildConsolidatedRegistry();
         const names = Object.keys(registry);
