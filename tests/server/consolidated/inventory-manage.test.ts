@@ -398,7 +398,8 @@ describe('inventory_manage consolidated tool', () => {
             }, ctx);
             const potionId = parseItemResult(potion).item.id;
             await handleInventoryManage({ action: 'give', characterId: testCharId, itemId: potionId, quantity: 1 }, ctx);
-            await handleInventoryManage({ action: 'use', characterId: testCharId, itemId: potionId }, ctx);
+            const useResult = await handleInventoryManage({ action: 'use', characterId: testCharId, itemId: potionId }, ctx);
+            expect(parseResult(useResult).success).toBe(true); // don't false-pass if `use` errored
 
             // Healing clamps to 0 — HP must not drop below where it started.
             expect(charRepo.findById(testCharId)?.hp).toBe(8);
