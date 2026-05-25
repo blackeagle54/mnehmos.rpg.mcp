@@ -164,6 +164,21 @@ describe('combat_manage consolidated tool', () => {
             expect(fixed?.initiative).toBe(99);
         });
 
+        // The engine only honors initiative > 0; the schema must reject non-positive
+        // values rather than accept-then-silently-reroll them (schema↔engine contract).
+        it('rejects a non-positive `initiative` instead of silently rolling it (#22 — CodeRabbit)', async () => {
+            const result = await handleCombatManage({
+                action: 'create',
+                participants: [
+                    { id: 'bad-init', name: 'Bad', hp: 20, maxHp: 20, initiative: 0, isEnemy: false }
+                ]
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.success).not.toBe(true);
+            expect(data.error).toBeDefined();
+        });
+
         // Regression for issue #46: side="enemy" was silently dropped, leaving
         // isEnemy=undefined → false. Enemies showed as PCs in the turn prompt.
         it('honors participant `side` as alias for isEnemy', async () => {

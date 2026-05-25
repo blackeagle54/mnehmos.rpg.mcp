@@ -42,8 +42,8 @@ const ParticipantSchema = z.object({
     name: z.string(),
     initiativeBonus: z.number().int().optional()
         .describe('Initiative modifier; the engine rolls d20 + this. Defaults to 0.'),
-    initiative: z.number().int().optional()
-        .describe('Pre-rolled initiative total. If provided, used directly instead of rolling d20 + initiativeBonus.'),
+    initiative: z.number().int().positive().optional()
+        .describe('Pre-rolled initiative total (positive). If provided, used directly instead of rolling d20 + initiativeBonus.'),
     hp: z.number().int().nonnegative(), // Allow 0 HP for dying characters
     maxHp: z.number().int().positive(),
     ac: z.number().int().min(0).optional()
