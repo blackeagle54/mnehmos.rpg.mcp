@@ -40,7 +40,10 @@ type CombatManageAction = typeof ACTIONS[number];
 const ParticipantSchema = z.object({
     id: z.string(),
     name: z.string(),
-    initiativeBonus: z.number().int(),
+    initiativeBonus: z.number().int().optional()
+        .describe('Initiative modifier; the engine rolls d20 + this. Defaults to 0.'),
+    initiative: z.number().int().optional()
+        .describe('Pre-rolled initiative total. If provided, used directly instead of rolling d20 + initiativeBonus.'),
     hp: z.number().int().nonnegative(), // Allow 0 HP for dying characters
     maxHp: z.number().int().positive(),
     ac: z.number().int().min(0).optional()
@@ -81,7 +84,7 @@ const TerrainSchema = z.object({
 
 const CreateSchema = z.object({
     action: z.literal('create'),
-    seed: z.string().describe('Seed for deterministic combat resolution'),
+    seed: z.string().optional().describe('Seed for deterministic combat resolution (auto-generated if omitted)'),
     participants: z.array(ParticipantSchema).min(1),
     terrain: TerrainSchema
 });

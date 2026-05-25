@@ -130,6 +130,40 @@ describe('combat_manage consolidated tool', () => {
             expect(knight?.ac).toBe(18);
         });
 
+        // #22: seed is an implementation detail and initiativeBonus is a modifier a
+        // DM shouldn't be forced to supply. Both were required → create rejected
+        // natural input. (Repro mirrors the issue: no seed, a participant with a
+        // rolled `initiative` and no `initiativeBonus`.)
+        it('creates an encounter without seed or per-participant initiativeBonus (#22)', async () => {
+            const result = await handleCombatManage({
+                action: 'create',
+                participants: [
+                    { id: 'valeros', name: 'Valeros', hp: 28, maxHp: 28, ac: 16, initiative: 15, isEnemy: false, position: { x: 5, y: 5 } }
+                ]
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.success).toBe(true);
+            expect(typeof data.encounterId).toBe('string');
+            expect((data.encounterId as string).length).toBeGreaterThan(0);
+        });
+
+        it('uses a pre-rolled participant `initiative` instead of rolling it (#22)', async () => {
+            const result = await handleCombatManage({
+                action: 'create',
+                participants: [
+                    // 99 is far above any d20+bonus roll, so it's unambiguous if honored.
+                    { id: 'fixed-init', name: 'Fixed', hp: 20, maxHp: 20, initiative: 99, isEnemy: false },
+                    { id: 'rolled', name: 'Rolled', hp: 20, maxHp: 20, initiativeBonus: 0, isEnemy: true }
+                ]
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.success).toBe(true);
+            const fixed = (data.participants as Array<{ id: string; initiative: number }>).find((p) => p.id === 'fixed-init');
+            expect(fixed?.initiative).toBe(99);
+        });
+
         // Regression for issue #46: side="enemy" was silently dropped, leaving
         // isEnemy=undefined → false. Enemies showed as PCs in the turn prompt.
         it('honors participant `side` as alias for isEnemy', async () => {
