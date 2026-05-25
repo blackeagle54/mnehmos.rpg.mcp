@@ -242,7 +242,7 @@ function ensureItemExists(itemRepo: ItemRepository, itemName: string): string {
 /**
  * Get sensible defaults for common D&D items
  */
-function getItemDefaults(itemName: string): {
+export function getItemDefaults(itemName: string): {
     type: 'weapon' | 'armor' | 'consumable' | 'quest' | 'misc';
     weight: number;
     value: number;
@@ -610,6 +610,18 @@ function getItemDefaults(itemName: string): {
             value: 0.5,
             description: 'A day\'s worth of travel rations.',
             properties: {}
+        };
+    }
+
+    // Generic weapon placeholders (e.g. "Martial Weapon", "Simple Weapon",
+    // "Martial Melee Weapon") — type as weapon, not misc. [#29]
+    if (name.includes('weapon')) {
+        return {
+            type: 'weapon',
+            weight: 3,
+            value: 15,
+            description: `A ${itemName.toLowerCase()}.`,
+            properties: { damage: '1d8', damageType: 'slashing' }
         };
     }
 
