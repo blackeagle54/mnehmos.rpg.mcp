@@ -158,6 +158,25 @@ describe('spawn_manage consolidated tool', () => {
             expect(data.rooms.length).toBe(2);
         });
 
+        it('places the room network at the given position, not 0,0 (#26 — CodeRabbit)', async () => {
+            const result = await handleSpawnManage({
+                action: 'spawn_location',
+                name: 'Hilltop Shrine',
+                locationType: 'temple',
+                position: '5,7',
+                rooms: [{ name: 'Sanctum', description: 'A quiet stone sanctum' }]
+            }, ctx);
+            const data = parseResult(result);
+            expect(data.success).toBe(true);
+
+            // getDb(':memory:') is a process singleton (storage/index.ts), so this is the
+            // same DB the handler wrote to.
+            const spatialRepo = new SpatialRepository(getDb(':memory:'));
+            const network = spatialRepo.findNetworkById(data.locationId);
+            expect(network?.centerX).toBe(5);
+            expect(network?.centerY).toBe(7);
+        });
+
         it('should create location without NPCs', async () => {
             const result = await handleSpawnManage({
                 action: 'spawn_location',

@@ -356,14 +356,16 @@ async function handleSpawnLocation(input: SpawnManageInput, _ctx: SessionContext
         const biome = /dungeon|cave|crypt/i.test(input.locationType || '') ? 'dungeon'
             : /forest|wood|wild|grove/i.test(input.locationType || '') ? 'forest'
             : 'urban';
+        // Coords from x/y or the "x,y" position string (avoids all networks at 0,0). [#26, CodeRabbit]
+        const [posX, posY] = (input.position || '').split(',').map((s) => parseInt(s.trim(), 10));
         // Create the room network first so room_nodes can link to it (FK). [#26]
         spatialRepo.createNetwork({
             id: locationId,
             name: locationName,
             type: 'cluster',
             worldId: input.worldId || 'local',
-            centerX: input.x ?? 0,
-            centerY: input.y ?? 0,
+            centerX: input.x ?? (Number.isFinite(posX) ? posX : 0),
+            centerY: input.y ?? (Number.isFinite(posY) ? posY : 0),
             createdAt: now,
             updatedAt: now
         } as any);
