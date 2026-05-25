@@ -114,6 +114,21 @@ describe('combat_manage consolidated tool', () => {
             expect(data.success).toBe(true);
         });
 
+        // Regression for issue #40: a custom participant `ac` was dropped, defaulting to 10.
+        it('honors a custom participant `ac` instead of defaulting to 10', async () => {
+            const result = await handleCombatManage({
+                action: 'create',
+                seed: 'ac-propagation-test',
+                participants: [
+                    { id: 'knight', name: 'Knight', initiativeBonus: 0, hp: 30, maxHp: 30, ac: 18, isEnemy: false }
+                ]
+            }, ctx);
+            const data = parseResult(result);
+            expect(data.success).toBe(true);
+            const knight = (data.participants as Array<{ id: string; ac: number }>).find((p) => p.id === 'knight');
+            expect(knight?.ac).toBe(18);
+        });
+
         // Regression for issue #46: side="enemy" was silently dropped, leaving
         // isEnemy=undefined → false. Enemies showed as PCs in the turn prompt.
         it('honors participant `side` as alias for isEnemy', async () => {
