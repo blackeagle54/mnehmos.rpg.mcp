@@ -227,8 +227,8 @@ export async function handleSpatialManage(args: unknown, ctx: SessionContext): P
             output += RichFormatter.alert(parsed.message || parsed.error || 'Unknown error', 'error');
             if (parsed.suggestions) {
                 output += '\n**Did you mean:**\n';
-                parsed.suggestions.forEach((s: { action: string; similarity: number }) => {
-                    output += `  • ${s.action} (${s.similarity}% match)\n`;
+                parsed.suggestions.forEach((s: { value: string; similarity: number }) => {
+                    output += `  • ${s.value} (${s.similarity}% match)\n`;
                 });
             }
         } else {
