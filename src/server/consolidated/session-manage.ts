@@ -162,7 +162,7 @@ async function handleInitialize(input: SessionManageInput, ctx: SessionContext):
         partyMembers: party?.members?.map(m => ({
             id: m.character.id,
             name: m.character.name,
-            class: (m.character as any).characterClass,
+            class: (m.character as any).class || (m.character as any).characterClass || 'Adventurer',
             hp: m.character.hp,
             maxHp: m.character.maxHp,
             isLeader: m.role === 'leader'

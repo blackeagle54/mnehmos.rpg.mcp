@@ -318,7 +318,7 @@ async function handleSpawnCharacter(input: SpawnManageInput, _ctx: SessionContex
 }
 
 async function handleSpawnLocation(input: SpawnManageInput, _ctx: SessionContext): Promise<McpResponse> {
-    const { charRepo, spatialRepo } = ensureDb();
+    const { charRepo, spatialRepo, db } = ensureDb();
     const now = new Date().toISOString();
 
     const locationId = randomUUID();
@@ -356,24 +356,59 @@ async function handleSpawnLocation(input: SpawnManageInput, _ctx: SessionContext
         const biome = /dungeon|cave|crypt/i.test(input.locationType || '') ? 'dungeon'
             : /forest|wood|wild|grove/i.test(input.locationType || '') ? 'forest'
             : 'urban';
-        for (const roomData of input.rooms) {
-            const roomId = randomUUID();
-            const desc = roomData.description || `${roomData.name} in ${locationName}.`;
-            const baseDescription = desc.length >= 10 ? desc : `${desc} (part of ${locationName}).`;
-            spatialRepo.create({
-                id: roomId,
-                name: roomData.name,
-                baseDescription,
-                biomeContext: biome,
-                atmospherics: [],
-                exits: [],
-                entityIds: [],
-                createdAt: now,
-                updatedAt: now,
-                visitedCount: 0
-            } as any);
-            createdRooms.push({ id: roomId, name: roomData.name });
+        // Resolve coords from x/y or a "x,y" position string; reject a malformed
+        // position rather than silently writing (0,0). [#26, CodeRabbit]
+        let centerX = input.x ?? 0;
+        let centerY = input.y ?? 0;
+        if (input.position !== undefined) {
+            const parts = input.position.split(',').map((s) => Number(s.trim()));
+            if (parts.length !== 2 || !parts.every((n) => Number.isInteger(n) && n >= 0)) {
+                return {
+                    content: [{
+                        type: 'text',
+                        text: RichFormatter.error(`Invalid position "${input.position}" — expected "x,y" non-negative integers`) +
+                            RichFormatter.embedJson({ error: true, message: 'Invalid position' }, 'SPAWN_MANAGE')
+                    }]
+                };
+            }
+            centerX = input.x ?? parts[0];
+            centerY = input.y ?? parts[1];
         }
+        // Atomic: the network and all its rooms commit together or not at all, so a
+        // failed room insert can't leave a partial/orphaned world. [#26, CodeRabbit]
+        const roomList = input.rooms;
+        db.transaction(() => {
+            // Create the room network first so room_nodes can link to it (FK). [#26]
+            spatialRepo.createNetwork({
+                id: locationId,
+                name: locationName,
+                type: 'cluster',
+                worldId: input.worldId || 'local',
+                centerX,
+                centerY,
+                createdAt: now,
+                updatedAt: now
+            } as any);
+            for (const roomData of roomList) {
+                const roomId = randomUUID();
+                const desc = roomData.description || `${roomData.name} in ${locationName}.`;
+                const baseDescription = desc.length >= 10 ? desc : `${desc} (part of ${locationName}).`;
+                spatialRepo.create({
+                    id: roomId,
+                    name: roomData.name,
+                    baseDescription,
+                    biomeContext: biome,
+                    networkId: locationId,
+                    atmospherics: [],
+                    exits: [],
+                    entityIds: [],
+                    createdAt: now,
+                    updatedAt: now,
+                    visitedCount: 0
+                } as any);
+                createdRooms.push({ id: roomId, name: roomData.name });
+            }
+        })();
     }
 
     let output = RichFormatter.header('Location Spawned', '🏠');
@@ -743,6 +778,18 @@ async function handleSpawnPresetLocation(input: SpawnManageInput, _ctx: SessionC
     } as any);
 
     // Create rooms as proper room_nodes via the spatial repository. [#26]
+    // Create the room network first so room_nodes can link to it (FK). [#26]
+    spatialRepo.createNetwork({
+        id: locationId,
+        name: locationName,
+        type: 'cluster',
+        worldId: input.worldId,
+        centerX: input.x ?? 0,
+        centerY: input.y ?? 0,
+        createdAt: now,
+        updatedAt: now
+    } as any);
+
     const createdRooms: Array<{ id: string; name: string }> = [];
     for (const roomData of presetData.rooms) {
         const roomId = randomUUID();
@@ -754,6 +801,7 @@ async function handleSpawnPresetLocation(input: SpawnManageInput, _ctx: SessionC
             name: roomData.name,
             baseDescription,
             biomeContext: meta.biome,
+            networkId: locationId,
             atmospherics: [],
             exits: [],
             entityIds: [],

@@ -6,6 +6,7 @@
 import { handleSpawnManage, SpawnManageTool } from '../../../src/server/consolidated/spawn-manage.js';
 import { getDb, closeDb } from '../../../src/storage/index.js';
 import { WorldRepository } from '../../../src/storage/repos/world.repo.js';
+import { SpatialRepository } from '../../../src/storage/repos/spatial.repo.js';
 import { randomUUID } from 'crypto';
 
 process.env.NODE_ENV = 'test';
@@ -157,6 +158,36 @@ describe('spawn_manage consolidated tool', () => {
             expect(data.rooms.length).toBe(2);
         });
 
+        it('places the room network at the given position, not 0,0 (#26 — CodeRabbit)', async () => {
+            const result = await handleSpawnManage({
+                action: 'spawn_location',
+                name: 'Hilltop Shrine',
+                locationType: 'temple',
+                position: '5,7',
+                rooms: [{ name: 'Sanctum', description: 'A quiet stone sanctum' }]
+            }, ctx);
+            const data = parseResult(result);
+            expect(data.success).toBe(true);
+
+            // getDb(':memory:') is a process singleton (storage/index.ts), so this is the
+            // same DB the handler wrote to.
+            const spatialRepo = new SpatialRepository(getDb(':memory:'));
+            const network = spatialRepo.findNetworkById(data.locationId);
+            expect(network?.centerX).toBe(5);
+            expect(network?.centerY).toBe(7);
+        });
+
+        it('rejects a malformed position instead of silently using (0,0) (#26 — CodeRabbit)', async () => {
+            const result = await handleSpawnManage({
+                action: 'spawn_location',
+                name: 'Broken Place',
+                rooms: [{ name: 'Room', description: 'A plain room here' }],
+                position: 'not-coords'
+            }, ctx);
+            const data = parseResult(result);
+            expect(data.error).toBe(true);
+        });
+
         it('should create location without NPCs', async () => {
             const result = await handleSpawnManage({
                 action: 'spawn_location',
@@ -259,6 +290,22 @@ describe('spawn_manage consolidated tool', () => {
             expect(data.poiId).toBeDefined();
             expect(data.preset).toBe('generic_tavern');
             expect(data.position).toEqual({ x: 50, y: 75 });
+        });
+
+        it('links created rooms to the location network so travel can find them (#26 — CodeRabbit)', async () => {
+            const result = await handleSpawnManage({
+                action: 'spawn_preset_location',
+                preset: 'generic_tavern',
+                worldId: testWorldId,
+                x: 12,
+                y: 12
+            }, ctx);
+            const data = parseResult(result);
+            expect(data.success).toBe(true);
+
+            const spatialRepo = new SpatialRepository(getDb(':memory:'));
+            const rooms = spatialRepo.findRoomsByNetwork(data.networkId);
+            expect(rooms.length).toBeGreaterThan(0);
         });
 
         it('should spawn with custom name', async () => {
