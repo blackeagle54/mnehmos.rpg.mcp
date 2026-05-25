@@ -78,7 +78,9 @@ const CreateSchema = z.object({
     factionId: z.string().optional(),
     behavior: z.string().optional(),
     knownSpells: z.array(z.string()).optional().default([]),
-    preparedSpells: z.array(z.string()).optional().default([]),
+    // No .default([]) here: omitted (undefined) must stay distinct from an explicit
+    // empty list so we only auto-prepare known spells when no list was given. (#23)
+    preparedSpells: z.array(z.string()).optional(),
     resistances: z.array(z.string()).optional().default([]),
     vulnerabilities: z.array(z.string()).optional().default([]),
     immunities: z.array(z.string()).optional().default([]),
@@ -189,6 +191,12 @@ async function handleCreate(args: z.infer<typeof CreateSchema>): Promise<object>
     const maxHp = args.maxHp ?? hp;
     const characterId = randomUUID();
 
+    // #23: when no prepared list is given, auto-prepare known spells so a fresh
+    // prepare-caster (wizard/cleric/…) can actually cast without a separate update.
+    // An explicit preparedSpells list — including an explicit empty [] meaning
+    // "prepare nothing" — is always respected.
+    const explicitlyPrepared = args.preparedSpells !== undefined;
+
     // Build the base character record from args. The character row MUST be
     // inserted before provisioning runs, otherwise inventory_items.character_id
     // FK fails when the provisioner tries to grant starting equipment.
@@ -209,7 +217,7 @@ async function handleCreate(args: z.infer<typeof CreateSchema>): Promise<object>
         behavior: args.behavior,
         knownSpells: args.knownSpells || [],
         cantripsKnown: [],
-        preparedSpells: args.preparedSpells || [],
+        preparedSpells: explicitlyPrepared ? args.preparedSpells : [...(args.knownSpells || [])],
         resistances: args.resistances || [],
         vulnerabilities: args.vulnerabilities || [],
         immunities: args.immunities || [],
@@ -248,10 +256,16 @@ async function handleCreate(args: z.infer<typeof CreateSchema>): Promise<object>
         character.cantripsKnown = provisioningResult.cantripsGranted || [];
         character.spellSlots = convertSpellSlotsToObject(provisioningResult.spellSlots ?? null);
         character.pactMagicSlots = provisioningResult.pactMagicSlots || undefined;
+        // Re-sync auto-prepared spells with the final known list, which may have
+        // grown via provisioning. An explicit preparedSpells list is left intact. (#23)
+        if (!explicitlyPrepared) {
+            character.preparedSpells = [...(character.knownSpells as string[])];
+        }
 
         characterRepo.update(characterId, {
             knownSpells: character.knownSpells as string[],
             cantripsKnown: character.cantripsKnown as string[],
+            preparedSpells: character.preparedSpells as string[],
             spellSlots: character.spellSlots,
             pactMagicSlots: character.pactMagicSlots
         } as any);
