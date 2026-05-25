@@ -1,0 +1,27 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# Focus CodeRabbit on critical bugs + architectural concerns; suppress nitpicks/style.
+language: "en-US"
+tone_instructions: "Report only critical bugs and architectural concerns. Skip style, naming, formatting, and minor nitpicks."
+reviews:
+  profile: chill
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - "development"
+      - "staging"
+      - "production"
+  path_instructions:
+    - path: "**/*"
+      instructions: |
+        Only report HIGH-SEVERITY findings. Two categories:
+        1. Critical bugs — crashes, data loss/corruption, security/auth flaws,
+           race conditions, SQL/column/schema mismatches, and logic errors that
+           cause incorrect behavior or persist bad state.
+        2. Architectural concerns — broken module boundaries, contract/schema
+           drift between layers (MCP handlers <-> repositories <-> DB), leaky
+           abstractions, violations of the "LLM describes, engine validates,
+           database is the source of truth" design, and changes that introduce
+           significant coupling or break established patterns.
+        Do NOT comment on style, formatting, naming, import order, minor
+        refactors, documentation wording, or test-structure nitpicks.
