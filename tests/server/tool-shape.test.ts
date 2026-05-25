@@ -46,6 +46,14 @@ describe('toolParamShape (#24)', () => {
         expect(() => toolParamShape(conflicting)).toThrow(/conflicting key/i);
     });
 
+    it('returns null for a mixed object/non-object intersection (advertised contract must match validation)', () => {
+        // collectShape can extract { a } from the object side, but the real schema
+        // also requires the string side — advertising { a } would diverge from
+        // runtime validation, so extraction must fail.
+        const mixed = z.intersection(z.object({ a: z.string() }), z.string());
+        expect(toolParamShape(mixed)).toBeNull();
+    });
+
     it('every consolidated tool exposes a non-empty parameter shape', () => {
         const registry = buildConsolidatedRegistry();
         const names = Object.keys(registry);

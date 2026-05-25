@@ -38,7 +38,11 @@ function collectShape(schema: unknown, seen: Set<unknown>): z.ZodRawShape | null
     if (def.left && def.right) {
         const left = collectShape(def.left, seen);
         const right = collectShape(def.right, seen);
-        if (left === null || right === null) return left ?? right; // best effort if one side isn't object-like
+        // If a side isn't object-like, the intersection can't be flattened to a
+        // pure param shape. Signal failure (null) so the startup guard rejects it
+        // rather than advertising a partial contract that runtime validation
+        // (which parses the real intersection) would reject anyway.
+        if (left === null || right === null) return null;
         for (const key of Object.keys(right)) {
             if (key in left) {
                 throw new Error(
