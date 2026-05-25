@@ -4,6 +4,13 @@ language: "en-US"
 tone_instructions: "Flag real bugs and correctness/logic/edge-case issues at any severity, plus architectural concerns. Skip only pure style (formatting/naming)."
 reviews:
   profile: chill
+  tools:
+    # The project's quality bar is `tsc` + Vitest — the maintainer has never used
+    # ESLint (no config in repo history, no eslint devDependency). Disable CodeRabbit's
+    # ESLint integration so it stops emitting a "no ESLint config detected" warning on
+    # every review for a tool this codebase intentionally doesn't use.
+    eslint:
+      enabled: false
   auto_review:
     enabled: true
     drafts: false
