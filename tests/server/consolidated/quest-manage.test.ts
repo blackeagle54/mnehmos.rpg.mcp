@@ -134,6 +134,30 @@ describe('quest_manage consolidated tool', () => {
             expect(data.questId).toBeDefined();
         });
 
+        // #21: objective `type` was required, so omitting it failed validation.
+        // It should default to 'custom' (the catch-all) so a quest can be created
+        // without the DM guessing the enum.
+        it('defaults objective type to "custom" when omitted (#21)', async () => {
+            const createResult = await handleQuestManage({
+                action: 'create',
+                name: 'Find the Cave',
+                description: 'Locate the hidden cave',
+                worldId: testWorldId,
+                objectives: [
+                    { description: 'Find the cave' } // no `type`
+                ]
+            }, ctx);
+
+            const created = parseResult(createResult);
+            expect(created.success).toBe(true);
+            expect(created.questId).toBeDefined();
+
+            // The stored objective must have defaulted to 'custom'.
+            const getResult = await handleQuestManage({ action: 'get', questId: created.questId }, ctx);
+            const got = parseResult(getResult);
+            expect(got.quest.objectives[0].type).toBe('custom');
+        });
+
         it('should accept "new" alias', async () => {
             const result = await handleQuestManage({
                 action: 'new',

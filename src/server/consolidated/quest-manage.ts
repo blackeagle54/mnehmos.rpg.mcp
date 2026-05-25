@@ -56,7 +56,8 @@ const CreateSchema = z.object({
     objectives: z.array(z.object({
         id: z.string().optional(),
         description: z.string(),
-        type: z.enum(['kill', 'collect', 'deliver', 'explore', 'interact', 'custom']),
+        type: z.enum(['kill', 'collect', 'deliver', 'explore', 'interact', 'custom']).default('custom')
+            .describe('Objective type; defaults to "custom" when omitted'),
         target: z.string().default(''),
         required: z.number().int().min(1).default(1),
         current: z.number().int().default(0),
