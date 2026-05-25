@@ -427,6 +427,41 @@ describe('inventory_manage consolidated tool', () => {
             expect(data.error).toBeDefined();
             expect(data.message).toContain('does not own');
         });
+
+        it('rejects equipping a consumable in a weapon slot (#37)', async () => {
+            const potion = await handleItemManage({
+                action: 'create', name: 'Potion', type: 'consumable', weight: 0.5, value: 25
+            }, ctx);
+            const potionId = parseItemResult(potion).item.id;
+            await handleInventoryManage({
+                action: 'give', characterId: testCharId, itemId: potionId, quantity: 1
+            }, ctx);
+
+            const result = await handleInventoryManage({
+                action: 'equip', characterId: testCharId, itemId: potionId, slot: 'mainhand'
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.error).toBeDefined();
+            expect(String(data.message)).toMatch(/consumable|cannot equip|slot/i);
+        });
+
+        it('rejects equipping armor in the accessory slot (#37)', async () => {
+            const armor = await handleItemManage({
+                action: 'create', name: 'Plate Mail', type: 'armor', weight: 65, value: 1500
+            }, ctx);
+            const armorId = parseItemResult(armor).item.id;
+            await handleInventoryManage({
+                action: 'give', characterId: testCharId, itemId: armorId, quantity: 1
+            }, ctx);
+
+            const result = await handleInventoryManage({
+                action: 'equip', characterId: testCharId, itemId: armorId, slot: 'accessory'
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.error).toBeDefined();
+        });
     });
 
     describe('unequip action', () => {

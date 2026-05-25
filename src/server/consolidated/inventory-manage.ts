@@ -19,6 +19,16 @@ import { DiceEngine } from '../../math/dice.js';
 // ═══════════════════════════════════════════════════════════════════════════
 
 const ACTIONS = ['give', 'remove', 'transfer', 'use', 'equip', 'unequip', 'get', 'get_detailed'] as const;
+
+// Which item types may occupy each equipment slot. [#37]
+const SLOT_ALLOWED_TYPES: Record<string, string[]> = {
+    mainhand: ['weapon'],
+    offhand: ['weapon', 'armor'], // weapon or shield (shields are type 'armor')
+    armor: ['armor'],
+    head: ['armor', 'misc'],
+    feet: ['armor', 'misc'],
+    accessory: ['misc'],
+};
 type InventoryAction = typeof ACTIONS[number];
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -319,6 +329,14 @@ const definitions: Record<InventoryAction, ActionDefinition> = {
             const item = itemRepo.findById(params.itemId);
             if (!item) {
                 throw new Error(`Item not found: ${params.itemId}`);
+            }
+
+            // Validate the item type is allowed in the requested slot. [#37]
+            const allowedTypes = SLOT_ALLOWED_TYPES[params.slot] ?? [];
+            if (!allowedTypes.includes(item.type)) {
+                throw new Error(
+                    `Cannot equip ${item.type} "${item.name}" in ${params.slot} slot (allowed: ${allowedTypes.join(', ')})`
+                );
             }
 
             inventoryRepo.equipItem(params.characterId, params.itemId, params.slot);
