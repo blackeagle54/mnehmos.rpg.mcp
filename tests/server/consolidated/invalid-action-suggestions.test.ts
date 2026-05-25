@@ -16,8 +16,8 @@ import { handleTurnManage } from '../../../src/server/consolidated/turn-manage.j
 import { handleInventoryManage } from '../../../src/server/consolidated/inventory-manage.js';
 import { handleSpatialManage } from '../../../src/server/consolidated/spatial-manage.js';
 
-process.env.NODE_ENV = 'test';
-
+// No NODE_ENV mutation needed: the invalid-action path is resolved by the action
+// router before any handler body runs, so no DB (getDb) is ever touched here.
 const ctx = { sessionId: 'test-suggestions' };
 
 // Split the embedded JSON block (<!-- TAG_JSON\n...\nTAG_JSON -->) from the
