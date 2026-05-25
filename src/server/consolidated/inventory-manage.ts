@@ -12,6 +12,7 @@ import { INVENTORY_LIMITS } from '../../schema/inventory.js';
 import { getDb } from '../../storage/index.js';
 import { SessionContext } from '../types.js';
 import { RichFormatter } from '../utils/formatter.js';
+import { DiceEngine } from '../../math/dice.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -239,7 +240,7 @@ const definitions: Record<InventoryAction, ActionDefinition> = {
     use: {
         schema: UseSchema,
         handler: async (params: z.infer<typeof UseSchema>) => {
-            const { inventoryRepo, itemRepo } = ensureDb();
+            const { inventoryRepo, itemRepo, charRepo } = ensureDb();
 
             const item = itemRepo.findById(params.itemId);
             if (!item) {
@@ -263,7 +264,28 @@ const definitions: Record<InventoryAction, ActionDefinition> = {
                 throw new Error(`Failed to consume item`);
             }
 
-            const effect = item.properties?.effect || item.properties?.effects || 'No defined effect';
+            const baseEffect = item.properties?.effect || item.properties?.effects || 'No defined effect';
+
+            // Resolve healing dice (e.g. "2d4+2"): roll, apply to target HP (clamped), report. [#36]
+            const healingExpr = item.properties?.healing;
+            let healing: number | undefined;
+            let hpBefore: number | undefined;
+            let hpAfter: number | undefined;
+            if (typeof healingExpr === 'string' && healingExpr.trim()) {
+                const targetId = params.targetId || params.characterId;
+                const target = charRepo.findById(targetId);
+                if (target) {
+                    const rolled = Number(new DiceEngine().roll(healingExpr).result) || 0;
+                    hpBefore = target.hp;
+                    hpAfter = Math.min(target.maxHp, target.hp + rolled);
+                    healing = hpAfter - hpBefore;
+                    charRepo.update(targetId, { hp: hpAfter });
+                }
+            }
+
+            const effect = healing !== undefined
+                ? `Healed ${healing} HP (rolled ${healingExpr})`
+                : baseEffect;
 
             return {
                 success: true,
@@ -272,6 +294,7 @@ const definitions: Record<InventoryAction, ActionDefinition> = {
                 characterId: params.characterId,
                 targetId: params.targetId || params.characterId,
                 effect,
+                ...(healing !== undefined ? { healing, hpBefore, hpAfter } : {}),
                 message: `Used ${item.name}`
             };
         },

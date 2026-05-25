@@ -298,6 +298,47 @@ describe('inventory_manage consolidated tool', () => {
             expect(data.effect).toBe('Restore 2d4+2 HP');
         });
 
+        it('rolls properties.healing and applies HP to the target (#36)', async () => {
+            const db = getDb(':memory:');
+            const charRepo = new CharacterRepository(db);
+            // Damage the hero to 6/10 — any 2d4+2 (min 4) heals to full, so the
+            // clamp makes the result deterministic (hpAfter = 10, healing = 4).
+            charRepo.update(testCharId, { hp: 6 } as any);
+
+            const potion = await handleItemManage({
+                action: 'create',
+                name: 'Potion of Healing',
+                type: 'consumable',
+                weight: 0.5,
+                value: 50,
+                properties: { healing: '2d4+2' }
+            }, ctx);
+            const healingPotionId = parseItemResult(potion).item.id;
+
+            await handleInventoryManage({
+                action: 'give',
+                characterId: testCharId,
+                itemId: healingPotionId,
+                quantity: 1
+            }, ctx);
+
+            const result = await handleInventoryManage({
+                action: 'use',
+                characterId: testCharId,
+                itemId: healingPotionId
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.success).toBe(true);
+            expect(data.hpBefore).toBe(6);
+            expect(data.hpAfter).toBe(10);
+            expect(data.healing).toBe(4);
+            expect(String(data.effect)).toMatch(/heal|HP/i);
+
+            // HP change must be persisted
+            expect(charRepo.findById(testCharId)?.hp).toBe(10);
+        });
+
         it('should accept "consume" alias', async () => {
             const result = await handleInventoryManage({
                 action: 'consume',
