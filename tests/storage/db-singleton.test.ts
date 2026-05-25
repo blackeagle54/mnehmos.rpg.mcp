@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { getDb, getDbPath, closeDb } from '../../src/storage/index.js';
+import { getDb, getDbPath, closeDb, setDb } from '../../src/storage/index.js';
 
 describe('getDb singleton path semantics (#68)', () => {
     beforeEach(() => closeDb()); // start from an uninitialized singleton
@@ -30,5 +30,16 @@ describe('getDb singleton path semantics (#68)', () => {
         // The same path — or no path — still returns the existing instance.
         expect(getDb(':memory:')).toBe(db1);
         expect(getDb()).toBe(db1);
+    });
+
+    it('does not throw a confusing "null path" error when the active path is unknown (#68 — CodeRabbit)', () => {
+        // An injected instance whose path can't be determined leaves activeDbPath
+        // null; the conflict check must be skipped (we can't prove a conflict)
+        // rather than reporting "already initialized at null".
+        const fake = { name: undefined, close() { /* no-op */ }, pragma() { /* no-op */ } } as never;
+        setDb(fake);
+
+        expect(() => getDb('/tmp/rpgmcp-unknown.db')).not.toThrow();
+        expect(getDb('/tmp/rpgmcp-unknown.db')).toBe(fake);
     });
 });

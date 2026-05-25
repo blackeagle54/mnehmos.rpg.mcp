@@ -123,8 +123,10 @@ export function getDb(path?: string): Database.Database {
         return dbInstance;
     }
     // Process-global singleton: an explicit path that conflicts with the open
-    // instance is rejected rather than silently returning a different DB. (#68)
-    if (path !== undefined) {
+    // instance is rejected rather than silently returning a different DB. Only
+    // enforced when the active path is known — an injected instance with no
+    // resolvable path (activeDbPath null) can't be proven to conflict. (#68)
+    if (path !== undefined && activeDbPath !== null) {
         const requested = resolveDbPath(path);
         if (requested !== activeDbPath) {
             throw new Error(
