@@ -71,7 +71,10 @@ const GetExitsSchema = z.object({
 const MoveSchema = z.object({
     action: z.literal('move'),
     characterId: z.string().uuid().describe('Character ID'),
-    roomId: z.string().uuid().describe('Destination room ID')
+    roomId: z.string().uuid().optional().describe('Destination room ID (omit when moving by direction)'),
+    direction: DirectionEnum.optional().describe("Move through the current room's exit in this direction (#28)")
+}).refine(d => Boolean(d.roomId || d.direction), {
+    message: 'Provide either a roomId or a direction'
 });
 
 const ListSchema = z.object({
@@ -112,7 +115,8 @@ async function handleMove(args: z.infer<typeof MoveSchema>): Promise<object> {
     if (!currentContext) throw new Error('No session context');
     const result = await handleMoveCharacterToRoom({
         characterId: args.characterId,
-        roomId: args.roomId
+        roomId: args.roomId,
+        direction: args.direction
     }, currentContext);
     return extractResultData(result, 'move');
 }

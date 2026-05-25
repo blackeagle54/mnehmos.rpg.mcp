@@ -104,11 +104,37 @@ const SpatialTools = {
 
   MOVE_CHARACTER_TO_ROOM: {
     name: "move_character_to_room",
-    description: "Move a character to a room and increment its visit count.",
-    inputSchema: z.object({
-      characterId: z.string().uuid().describe("ID of the character to move"),
-      roomId: z.string().uuid().describe("ID of the destination room"),
-    }),
+    description:
+      "Move a character to a room (by roomId, or by a direction resolved from the character's current room exits) and increment its visit count.",
+    inputSchema: z
+      .object({
+        characterId: z.string().uuid().describe("ID of the character to move"),
+        roomId: z
+          .string()
+          .uuid()
+          .optional()
+          .describe("ID of the destination room (omit when moving by direction)"),
+        direction: z
+          .enum([
+            "north",
+            "south",
+            "east",
+            "west",
+            "up",
+            "down",
+            "northeast",
+            "northwest",
+            "southeast",
+            "southwest",
+          ])
+          .optional()
+          .describe(
+            "Direction of an exit from the character's current room; resolved to the target room"
+          ),
+      })
+      .refine((d) => Boolean(d.roomId || d.direction), {
+        message: "Provide either roomId or direction",
+      }),
   },
 
   LIST_ROOMS: {
@@ -440,7 +466,108 @@ export async function handleMoveCharacterToRoom(
     };
   }
 
-  const room = spatialRepo.findById(parsed.roomId);
+  // Resolve the destination: an explicit roomId, or a direction exit from the
+  // character's current room. (#28)
+  let destinationRoomId = parsed.roomId;
+  if (!destinationRoomId && parsed.direction) {
+    const currentRoomId = (character as unknown as { currentRoomId?: string })
+      .currentRoomId;
+    if (!currentRoomId) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(
+              {
+                success: false,
+                error:
+                  "Character is not in any room; cannot move by direction. Provide a roomId or move the character into a room first.",
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
+    const currentRoom = spatialRepo.findById(currentRoomId);
+    if (!currentRoom) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(
+              {
+                success: false,
+                error: "Character's current room not found in database",
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
+    const exit = currentRoom.exits.find(
+      (e) => e.direction === parsed.direction
+    );
+    // Mirror look_at_surroundings visibility: only OPEN exits are traversable by
+    // direction. A HIDDEN exit is reported as "no exit" so movement can't reveal a
+    // secret passage; a LOCKED exit is reported as locked. This prevents a
+    // direction move from bypassing exit state. (#28 — CodeRabbit)
+    if (!exit || exit.type === "HIDDEN") {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(
+              {
+                success: false,
+                error: `No exit to the ${parsed.direction} from ${currentRoom.name}`,
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
+    if (exit.type !== "OPEN") {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(
+              {
+                success: false,
+                error: `The ${parsed.direction} exit from ${currentRoom.name} is ${exit.type.toLowerCase()}`,
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
+    destinationRoomId = exit.targetNodeId;
+  }
+
+  if (!destinationRoomId) {
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify(
+            { success: false, error: "Provide either a roomId or a direction" },
+            null,
+            2
+          ),
+        },
+      ],
+    };
+  }
+
+  const room = spatialRepo.findById(destinationRoomId);
   if (!room) {
     return {
       content: [
@@ -473,15 +600,15 @@ export async function handleMoveCharacterToRoom(
   // Update character's current room (using unknown to bypass TypeScript checks for current_room_id)
   const updatedChar = {
     ...(character as any),
-    currentRoomId: parsed.roomId,
+    currentRoomId: destinationRoomId,
   };
   characterRepo.update(parsed.characterId, updatedChar as any);
 
   // Add character to new room
-  spatialRepo.addEntityToRoom(parsed.roomId, parsed.characterId);
+  spatialRepo.addEntityToRoom(destinationRoomId, parsed.characterId);
 
   // Increment visit count
-  spatialRepo.incrementVisitCount(parsed.roomId);
+  spatialRepo.incrementVisitCount(destinationRoomId);
 
   return {
     content: [
@@ -492,7 +619,7 @@ export async function handleMoveCharacterToRoom(
             success: true,
             characterId: parsed.characterId,
             characterName: character.name,
-            newRoomId: parsed.roomId,
+            newRoomId: destinationRoomId,
             newRoomName: room.name,
             visitedCount: room.visitedCount + 1,
           },
