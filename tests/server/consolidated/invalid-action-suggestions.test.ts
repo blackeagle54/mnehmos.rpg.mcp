@@ -15,6 +15,17 @@ import { handleWorldManage } from '../../../src/server/consolidated/world-manage
 import { handleTurnManage } from '../../../src/server/consolidated/turn-manage.js';
 import { handleInventoryManage } from '../../../src/server/consolidated/inventory-manage.js';
 import { handleSpatialManage } from '../../../src/server/consolidated/spatial-manage.js';
+import { handleAuraManage } from '../../../src/server/consolidated/aura-manage.js';
+import { handleCombatAction } from '../../../src/server/consolidated/combat-action.js';
+import { handleCombatManage } from '../../../src/server/consolidated/combat-manage.js';
+import { handleCombatMap } from '../../../src/server/consolidated/combat-map.js';
+import { handleCorpseManage } from '../../../src/server/consolidated/corpse-manage.js';
+import { handleItemManage } from '../../../src/server/consolidated/item-manage.js';
+import { handleMathManage } from '../../../src/server/consolidated/math-manage.js';
+import { handleNpcManage } from '../../../src/server/consolidated/npc-manage.js';
+import { handleQuestManage } from '../../../src/server/consolidated/quest-manage.js';
+import { handleStrategyManage } from '../../../src/server/consolidated/strategy-manage.js';
+import { handleTheftManage } from '../../../src/server/consolidated/theft-manage.js';
 
 // No NODE_ENV mutation needed: the invalid-action path is resolved by the action
 // router before any handler body runs, so no DB (getDb) is ever touched here.
@@ -32,6 +43,7 @@ function splitResult(result: { content: Array<{ type: string; text: string }> })
 
 type Handler = (args: unknown, ctx: { sessionId: string }) => Promise<{ content: Array<{ type: string; text: string }> }>;
 
+// All 17 consolidated handlers whose formatters were fixed from s.action → s.value.
 const cases: Array<[string, Handler]> = [
     ['improvisation_manage', handleImprovisationManage as Handler],
     ['world_map', handleWorldMap as Handler],
@@ -39,6 +51,17 @@ const cases: Array<[string, Handler]> = [
     ['turn_manage', handleTurnManage as Handler],
     ['inventory_manage', handleInventoryManage as Handler],
     ['spatial_manage', handleSpatialManage as Handler],
+    ['aura_manage', handleAuraManage as Handler],
+    ['combat_action', handleCombatAction as Handler],
+    ['combat_manage', handleCombatManage as Handler],
+    ['combat_map', handleCombatMap as Handler],
+    ['corpse_manage', handleCorpseManage as Handler],
+    ['item_manage', handleItemManage as Handler],
+    ['math_manage', handleMathManage as Handler],
+    ['npc_manage', handleNpcManage as Handler],
+    ['quest_manage', handleQuestManage as Handler],
+    ['strategy_manage', handleStrategyManage as Handler],
+    ['theft_manage', handleTheftManage as Handler],
 ];
 
 describe('invalid-action suggestions render action names, not undefined (#69)', () => {
