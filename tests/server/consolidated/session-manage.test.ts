@@ -386,6 +386,10 @@ describe('session_manage consolidated tool', () => {
             // rather than `.characterClass` (which is undefined → 'Adventurer').
             expect(text).toContain('Fighter');
             expect(text).not.toContain('Adventurer');
+
+            // The JSON result must also carry the class, not just the display text. [#35, CodeRabbit]
+            const data = parseResult(result);
+            expect(data.partyMembers[0].class).toBe('Fighter');
         });
     });
 });

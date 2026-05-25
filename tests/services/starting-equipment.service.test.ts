@@ -20,4 +20,10 @@ describe('getItemDefaults — weapon type inference (#29)', () => {
     expect(getItemDefaults('Leather Armor').type).toBe('armor');
     expect(getItemDefaults('Rations (1 day)').type).toBe('consumable');
   });
+
+  it('does not misclassify items that merely contain "weapon" (#29 — CodeRabbit)', () => {
+    // Tightened from includes('weapon') to endsWith('weapon').
+    expect(getItemDefaults("Weaponsmith's Tools").type).not.toBe('weapon');
+    expect(getItemDefaults('Weapon Rack').type).not.toBe('weapon');
+  });
 });

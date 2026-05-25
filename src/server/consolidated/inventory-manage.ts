@@ -303,7 +303,8 @@ const definitions: Record<InventoryAction, ActionDefinition> = {
             let hpAfter: number | undefined;
             if (target && rolled !== undefined) {
                 hpBefore = target.hp;
-                hpAfter = Math.min(target.maxHp, target.hp + rolled);
+                // Healing never reduces HP — clamp a negative roll to 0. [CodeRabbit]
+                hpAfter = Math.min(target.maxHp, target.hp + Math.max(0, rolled));
                 healing = hpAfter - hpBefore;
                 charRepo.update(targetId, { hp: hpAfter });
             }

@@ -375,6 +375,7 @@ describe('inventory_manage consolidated tool', () => {
 
             const invRepo = new InventoryRepository(getDb(':memory:'));
             const qtyBefore = invRepo.getInventory(testCharId).items.find((i: any) => i.itemId === potionId)?.quantity;
+            expect(qtyBefore).toBe(2); // guard: repo sees the same in-memory DB the handler writes to
 
             const result = await handleInventoryManage({
                 action: 'use', characterId: testCharId, itemId: potionId
@@ -384,6 +385,23 @@ describe('inventory_manage consolidated tool', () => {
             // A malformed expression must be rejected BEFORE the item is consumed.
             const qtyAfter = invRepo.getInventory(testCharId).items.find((i: any) => i.itemId === potionId)?.quantity;
             expect(qtyAfter).toBe(qtyBefore);
+        });
+
+        it('a negative healing roll never reduces HP (#36 — CodeRabbit)', async () => {
+            const db = getDb(':memory:');
+            const charRepo = new CharacterRepository(db);
+            charRepo.update(testCharId, { hp: 8 } as any);
+
+            const potion = await handleItemManage({
+                action: 'create', name: 'Cursed Draught', type: 'consumable', weight: 0.5, value: 5,
+                properties: { healing: '2d4-50' } // valid expression, negative result
+            }, ctx);
+            const potionId = parseItemResult(potion).item.id;
+            await handleInventoryManage({ action: 'give', characterId: testCharId, itemId: potionId, quantity: 1 }, ctx);
+            await handleInventoryManage({ action: 'use', characterId: testCharId, itemId: potionId }, ctx);
+
+            // Healing clamps to 0 — HP must not drop below where it started.
+            expect(charRepo.findById(testCharId)?.hp).toBe(8);
         });
 
         it('should accept "consume" alias', async () => {

@@ -356,6 +356,17 @@ async function handleSpawnLocation(input: SpawnManageInput, _ctx: SessionContext
         const biome = /dungeon|cave|crypt/i.test(input.locationType || '') ? 'dungeon'
             : /forest|wood|wild|grove/i.test(input.locationType || '') ? 'forest'
             : 'urban';
+        // Create the room network first so room_nodes can link to it (FK). [#26]
+        spatialRepo.createNetwork({
+            id: locationId,
+            name: locationName,
+            type: 'cluster',
+            worldId: input.worldId || 'local',
+            centerX: input.x ?? 0,
+            centerY: input.y ?? 0,
+            createdAt: now,
+            updatedAt: now
+        } as any);
         for (const roomData of input.rooms) {
             const roomId = randomUUID();
             const desc = roomData.description || `${roomData.name} in ${locationName}.`;
@@ -365,6 +376,7 @@ async function handleSpawnLocation(input: SpawnManageInput, _ctx: SessionContext
                 name: roomData.name,
                 baseDescription,
                 biomeContext: biome,
+                networkId: locationId,
                 atmospherics: [],
                 exits: [],
                 entityIds: [],
@@ -743,6 +755,18 @@ async function handleSpawnPresetLocation(input: SpawnManageInput, _ctx: SessionC
     } as any);
 
     // Create rooms as proper room_nodes via the spatial repository. [#26]
+    // Create the room network first so room_nodes can link to it (FK). [#26]
+    spatialRepo.createNetwork({
+        id: locationId,
+        name: locationName,
+        type: 'cluster',
+        worldId: input.worldId,
+        centerX: input.x ?? 0,
+        centerY: input.y ?? 0,
+        createdAt: now,
+        updatedAt: now
+    } as any);
+
     const createdRooms: Array<{ id: string; name: string }> = [];
     for (const roomData of presetData.rooms) {
         const roomId = randomUUID();
@@ -754,6 +778,7 @@ async function handleSpawnPresetLocation(input: SpawnManageInput, _ctx: SessionC
             name: roomData.name,
             baseDescription,
             biomeContext: meta.biome,
+            networkId: locationId,
             atmospherics: [],
             exits: [],
             entityIds: [],

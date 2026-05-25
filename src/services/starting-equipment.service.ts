@@ -615,7 +615,7 @@ export function getItemDefaults(itemName: string): {
 
     // Generic weapon placeholders (e.g. "Martial Weapon", "Simple Weapon",
     // "Martial Melee Weapon") — type as weapon, not misc. [#29]
-    if (name.includes('weapon')) {
+    if (name.endsWith('weapon')) {
         return {
             type: 'weapon',
             weight: 3,

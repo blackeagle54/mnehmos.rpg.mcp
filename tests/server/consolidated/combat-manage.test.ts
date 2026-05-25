@@ -125,7 +125,8 @@ describe('combat_manage consolidated tool', () => {
             }, ctx);
             const data = parseResult(result);
             expect(data.success).toBe(true);
-            const knight = (data.participants as Array<{ id: string; ac: number }>).find((p) => p.id === 'knight');
+            expect(Array.isArray(data.participants)).toBe(true);
+            const knight = (data.participants as Array<{ id: string; ac?: number }>).find((p) => p.id === 'knight');
             expect(knight?.ac).toBe(18);
         });
 
