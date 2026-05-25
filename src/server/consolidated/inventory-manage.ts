@@ -451,13 +451,16 @@ const definitions: Record<InventoryAction, ActionDefinition> = {
         handler: async (params: z.infer<typeof GetSchema>) => {
             const { inventoryRepo } = ensureDb();
 
-            const inventory = inventoryRepo.getInventory(params.characterId);
+            // Use the detailed variant so items carry resolved records (names),
+            // not raw IDs, and so gold reflects the character's currency. (#27)
+            const inventory = inventoryRepo.getInventoryWithDetails(params.characterId);
 
             return {
                 success: true,
                 actionType: 'get',
                 characterId: params.characterId,
                 inventory: inventory.items,
+                gold: inventory.currency.gold,
                 itemCount: inventory.items.length
             };
         },
@@ -478,7 +481,7 @@ const definitions: Record<InventoryAction, ActionDefinition> = {
                 inventory: inventory.items,
                 totalWeight: inventory.totalWeight,
                 capacity: inventory.capacity,
-                gold: (inventory as { gold?: number }).gold || 0,
+                gold: inventory.currency.gold, // currency.gold, not inventory.gold (#27)
                 itemCount: inventory.items.length
             };
         },
