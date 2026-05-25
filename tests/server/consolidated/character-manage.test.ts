@@ -83,6 +83,37 @@ describe('character_manage consolidated tool', () => {
             expect(parsed.level).toBe(5);
         });
 
+        // #23: a prepare-caster created with knownSpells but no preparedSpells could
+        // not cast until a separate update ("X is not prepared"). Known spells should
+        // be auto-prepared on creation.
+        it('auto-prepares known spells on creation so a fresh caster can cast (#23)', async () => {
+            const result = await handleCharacterManage({
+                action: 'create',
+                name: 'Fresh Wizard',
+                class: 'Wizard',
+                knownSpells: ['Magic Missile', 'Shield']
+            }, ctx);
+
+            const parsed = extractJson(result.content[0].text);
+            expect(parsed.success).toBe(true);
+            expect(parsed.preparedSpells).toEqual(expect.arrayContaining(['Magic Missile', 'Shield']));
+        });
+
+        it('respects an explicit preparedSpells list instead of auto-preparing all known (#23)', async () => {
+            const result = await handleCharacterManage({
+                action: 'create',
+                name: 'Selective Wizard',
+                class: 'Wizard',
+                knownSpells: ['Magic Missile', 'Shield', 'Fireball'],
+                preparedSpells: ['Magic Missile'],
+                provisionEquipment: false // isolate from provisioning spell grants
+            }, ctx);
+
+            const parsed = extractJson(result.content[0].text);
+            expect(parsed.success).toBe(true);
+            expect(parsed.preparedSpells).toEqual(['Magic Missile']);
+        });
+
         it('should provision equipment by default for PCs', async () => {
             const result = await handleCharacterManage({
                 action: 'create',
