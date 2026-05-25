@@ -345,12 +345,18 @@ export async function handleApplyMapPatch(args: unknown, ctx: SessionContext) {
             ]
         };
     } catch (error: any) {
+        // Return structured JSON (not plain text) so the consolidated layer can tell
+        // a parse failure apart from a successful patch. (#70)
         return {
             isError: true,
             content: [
                 {
                     type: 'text' as const,
-                    text: `Failed to parse patch script: ${error.message}`
+                    text: JSON.stringify({
+                        success: false,
+                        message: `Failed to parse patch script: ${error.message}`,
+                        commandsExecuted: 0
+                    }, null, 2)
                 }
             ]
         };

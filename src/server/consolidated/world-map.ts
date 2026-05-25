@@ -155,11 +155,15 @@ async function handleSuggestPoi(args: z.infer<typeof SuggestPoiSchema>): Promise
 }
 
 function extractResultData(result: McpResponse, actionType: string): Record<string, unknown> {
+    // Preserve an underlying handler's error state (isError) rather than assuming
+    // success — a non-JSON or error payload must not be reported as a success. The
+    // parsed data's own `success`, if present, still takes precedence via the spread. (#70)
+    const isError = (result as { isError?: boolean }).isError === true;
     try {
         const data = JSON.parse(result.content[0].text);
-        return { success: true, actionType, ...data };
+        return { success: !isError, actionType, ...data };
     } catch {
-        return { success: true, actionType, rawData: result.content[0].text };
+        return { success: !isError, actionType, rawData: result.content[0].text };
     }
 }
 
@@ -261,9 +265,9 @@ export async function handleWorldMap(args: unknown, ctx: SessionContext): Promis
 
         let output = '';
 
-        if (parsed.error) {
+        if (parsed.error || parsed.success === false) {
             output = RichFormatter.header('Error', '❌');
-            output += RichFormatter.alert(parsed.message || 'Unknown error', 'error');
+            output += RichFormatter.alert(parsed.message || parsed.error || 'Unknown error', 'error');
             if (parsed.suggestions) {
                 output += '\n**Did you mean:**\n';
                 parsed.suggestions.forEach((s: { value: string; similarity: number }) => {

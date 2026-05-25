@@ -182,6 +182,24 @@ describe('world_map consolidated tool', () => {
             expect(typeof data.success).toBe('boolean');
         });
 
+        // #70: a DSL that fails to PARSE was reported as a successful patch
+        // (parse-failure returned plain text → extractResultData defaulted to success).
+        it('reports an unparseable DSL script as a failure, not success (#70)', async () => {
+            const result = await handleWorldMap({
+                action: 'patch',
+                worldId: testWorldId,
+                script: 'NOT A VALID DSL'
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.success).toBe(false);
+
+            // the human-readable output must not claim the patch was applied
+            const text = result.content[0].text;
+            expect(text).not.toContain('Patch applied successfully');
+            expect(text).not.toContain('Map Patch Applied');
+        });
+
         it('should accept "apply" alias', async () => {
             const result = await handleWorldMap({
                 action: 'apply',
