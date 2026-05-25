@@ -121,12 +121,13 @@ async function main() {
     // intersected / wrapped schemas so a tool's parameters are never silently
     // dropped to `{}` (which would make the tool invisible to the LLM). (#24)
     const baseShape = toolParamShape(entry.schema as z.ZodTypeAny);
-    if (Object.keys(baseShape).length === 0) {
-      // Fail loud: a parameterless registration is almost certainly a schema bug,
-      // not an intent — surface it at startup instead of shipping a broken tool.
+    if (baseShape === null) {
+      // Fail loud: an unextractable inputSchema (not object-like) is a schema bug,
+      // not intent — surface it at startup instead of shipping a paramless tool.
+      // (An intentionally empty z.object({}) extracts to {}, which is allowed.)
       throw new Error(
-        `[Server] Tool "${toolName}" resolved to an empty parameter schema; ` +
-        `toolParamShape could not extract a shape from its inputSchema.`
+        `[Server] Tool "${toolName}" has an unsupported inputSchema; ` +
+        `toolParamShape could not extract a parameter shape from it.`
       );
     }
     const shape = { ...baseShape, sessionId: z.string().optional() };

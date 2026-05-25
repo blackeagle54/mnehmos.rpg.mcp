@@ -202,7 +202,7 @@ export async function handleLoadToolSchema(args: LoadToolSchemaArgs): Promise<{
   return {
     toolName: args.toolName,
     description: tool.metadata.description,
-    inputSchema: { ...toolParamShape(tool.schema as z.ZodTypeAny), ...sessionIdExt },
+    inputSchema: { ...(toolParamShape(tool.schema as z.ZodTypeAny) ?? {}), ...sessionIdExt },
     metadata: tool.metadata,
     note: `Schema loaded successfully. You can now call ${args.toolName} with these parameters.`
   };

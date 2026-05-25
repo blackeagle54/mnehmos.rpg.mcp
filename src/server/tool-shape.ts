@@ -11,32 +11,43 @@ import { z } from 'zod';
  *   - `.and()` / `z.intersection()` produce a ZodIntersection with no `.shape` at
  *     all — its members are under `_def.left` / `_def.right`.
  *
- * The previous registration logic (`schema.shape || schema._def?.schema?.shape || {}`)
- * silently returned `{}` for intersections, registering the tool with no
- * parameters. This walker unwraps each case so params are never silently lost.
+ * Returns `null` when the schema is not object-like (extraction failure), which
+ * callers can treat as an error — distinct from a legitimately empty
+ * `z.object({})`, which returns `{}`. Throws on an intersection whose sides
+ * define the same key, since a single flat MCP param shape cannot preserve
+ * "validate with both" semantics.
  */
-export function toolParamShape(schema: z.ZodTypeAny): z.ZodRawShape {
+export function toolParamShape(schema: z.ZodTypeAny): z.ZodRawShape | null {
     return collectShape(schema, new Set());
 }
 
-function collectShape(schema: unknown, seen: Set<unknown>): z.ZodRawShape {
-    if (!schema || typeof schema !== 'object' || seen.has(schema)) return {};
+function collectShape(schema: unknown, seen: Set<unknown>): z.ZodRawShape | null {
+    if (!schema || typeof schema !== 'object' || seen.has(schema)) return null;
     seen.add(schema);
 
     const anySchema = schema as { shape?: z.ZodRawShape; _def?: Record<string, unknown> };
 
-    // ZodObject (incl. results of .omit()/.pick(), which stay ZodObjects)
+    // ZodObject (incl. results of .omit()/.pick()). May legitimately be empty.
     if (anySchema.shape) return { ...anySchema.shape };
 
     const def = anySchema._def;
-    if (!def) return {};
+    if (!def) return null;
 
-    // ZodIntersection (.and / z.intersection): merge both members.
+    // ZodIntersection (.and / z.intersection): both sides contribute. A key
+    // present on both can't be flattened without dropping one validator.
     if (def.left && def.right) {
-        return {
-            ...collectShape(def.left, seen),
-            ...collectShape(def.right, seen),
-        };
+        const left = collectShape(def.left, seen);
+        const right = collectShape(def.right, seen);
+        if (left === null || right === null) return left ?? right; // best effort if one side isn't object-like
+        for (const key of Object.keys(right)) {
+            if (key in left) {
+                throw new Error(
+                    `toolParamShape: intersection defines conflicting key "${key}"; ` +
+                    `cannot flatten to a single MCP param shape.`
+                );
+            }
+        }
+        return { ...left, ...right };
     }
 
     // ZodEffects (refine/transform/preprocess): params are on the inner schema.
@@ -45,5 +56,5 @@ function collectShape(schema: unknown, seen: Set<unknown>): z.ZodRawShape {
     // ZodOptional/Nullable/Default/etc.: unwrap the wrapped type.
     if (def.innerType) return collectShape(def.innerType, seen);
 
-    return {};
+    return null;
 }
