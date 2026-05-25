@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
-# Focus CodeRabbit on critical bugs + architectural concerns; suppress nitpicks/style.
+# Focus CodeRabbit on real bugs/correctness at ANY severity + architecture; suppress only pure style.
 language: "en-US"
-tone_instructions: "Report only critical bugs and architectural concerns. Skip style, naming, formatting, and minor nitpicks."
+tone_instructions: "Flag real bugs and correctness/logic/edge-case issues at any severity, plus architectural concerns. Skip only pure style (formatting/naming)."
 reviews:
   profile: chill
   auto_review:
@@ -14,14 +14,14 @@ reviews:
   path_instructions:
     - path: "**/*"
       instructions: |
-        Only report HIGH-SEVERITY findings. Two categories:
-        1. Critical bugs — crashes, data loss/corruption, security/auth flaws,
-           race conditions, SQL/column/schema mismatches, and logic errors that
-           cause incorrect behavior or persist bad state.
-        2. Architectural concerns — broken module boundaries, contract/schema
-           drift between layers (MCP handlers <-> repositories <-> DB), leaky
-           abstractions, violations of the "LLM describes, engine validates,
-           database is the source of truth" design, and changes that introduce
-           significant coupling or break established patterns.
-        Do NOT comment on style, formatting, naming, import order, minor
-        refactors, documentation wording, or test-structure nitpicks.
+        Report EVERY genuine bug or correctness issue REGARDLESS of severity —
+        severity must NOT gate reporting; a real but minor bug should still be
+        flagged. This includes: logic errors, off-by-one, null/undefined and
+        unhandled cases, race conditions, incorrect error handling, state/order
+        bugs, data/schema/column mismatches, security/auth flaws, broken
+        contracts between layers (MCP handlers <-> repositories <-> DB), and
+        architectural concerns (broken boundaries, leaky abstractions,
+        violations of "LLM describes, engine validates, database is the source
+        of truth", significant new coupling).
+        Only skip PURE STYLE with no behavioral impact: formatting, naming,
+        import order, comment/doc wording, or subjective refactors.
