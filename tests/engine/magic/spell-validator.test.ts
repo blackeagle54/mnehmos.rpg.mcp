@@ -15,6 +15,7 @@ import {
     calculateSpellSaveDC,
     calculateSpellAttackBonus,
     hasSpellSlotAvailable,
+    canCastSpells,
 } from '../../../src/engine/magic/spell-validator.js';
 import type { Character } from '../../../src/schema/character.js';
 import type { CharacterClass } from '../../../src/schema/spell.js';
@@ -67,5 +68,20 @@ describe('spell-validator class lookup is case-insensitive and null-safe (#25)',
         expect(calculateSpellSaveDC(custom)).toBe(0);
         expect(calculateSpellAttackBonus(custom)).toBe(0);
         expect(getMaxSpellLevel('Chronomancer' as CharacterClass, 20)).toBe(0);
+    });
+
+    it('tolerates surrounding whitespace in the class name (#25 — CodeRabbit)', () => {
+        const cleric = makeCharacter({ characterClass: '  Cleric  ' });
+        // Whitespace must not demote a real caster to a non-caster (DC/attack 0).
+        expect(calculateSpellSaveDC(cleric)).toBe(15);
+        expect(calculateSpellAttackBonus(cleric)).toBe(7);
+        expect(getMaxSpellLevel('  Cleric  ' as CharacterClass, 5)).toBeGreaterThan(0);
+    });
+
+    it('canCastSpells gate also tolerates whitespace (#25 — CodeRabbit)', () => {
+        // The gate runs first in validateSpellCast; if it rejects "  Cleric  "
+        // the save-DC fix alone wouldn't make casting work end-to-end.
+        const cleric = makeCharacter({ characterClass: '  Cleric  ' });
+        expect(canCastSpells(cleric).canCast).toBe(true);
     });
 });

@@ -245,7 +245,7 @@ function getAbilityModifier(character: Character, ability: SpellcastingAbility):
  * Check if character can cast spells at all
  */
 export function canCastSpells(character: Character): { canCast: boolean; reason?: string } {
-    const charClass = (character.characterClass || 'fighter').toLowerCase() as CharacterClass;
+    const charClass = (character.characterClass || 'fighter').trim().toLowerCase() as CharacterClass;
     const config = SPELLCASTING_CONFIG[charClass];
 
     // Handle unknown/custom classes (monsters, NPCs, etc.)
@@ -291,7 +291,7 @@ export function characterKnowsSpell(character: Character, spellName: string): { 
         return { knows: false, reason: `Unknown spell: ${spellName}` };
     }
 
-    const charClass = (character.characterClass || 'fighter').toLowerCase() as CharacterClass;
+    const charClass = (character.characterClass || 'fighter').trim().toLowerCase() as CharacterClass;
     const config = SPELLCASTING_CONFIG[charClass];
 
     // Handle unknown/custom classes (monsters, NPCs, etc.)
@@ -664,7 +664,7 @@ export function consumeSpellSlot(character: Character, slotLevel: number): Chara
  * Restore all spell slots (for long rest)
  */
 export function restoreAllSpellSlots(character: Character): Character {
-    const charClass = (character.characterClass || 'fighter').toLowerCase() as CharacterClass;
+    const charClass = (character.characterClass || 'fighter').trim().toLowerCase() as CharacterClass;
     const config = SPELLCASTING_CONFIG[charClass];
 
     // Handle unknown/custom classes (monsters, NPCs, etc.)
@@ -697,7 +697,7 @@ export function restoreAllSpellSlots(character: Character): Character {
  * Restore warlock pact slots (for short rest)
  */
 export function restorePactSlots(character: Character): Character {
-    const charClass = (character.characterClass || 'fighter').toLowerCase() as CharacterClass;
+    const charClass = (character.characterClass || 'fighter').trim().toLowerCase() as CharacterClass;
     const config = SPELLCASTING_CONFIG[charClass];
 
     // Handle unknown/custom classes (monsters, NPCs, etc.)
@@ -723,8 +723,8 @@ export function restorePactSlots(character: Character): Character {
  * Returns default non-caster config for unknown/custom classes
  */
 export function getSpellcastingConfig(characterClass: string): SpellcastingConfig {
-    // Standard D&D classes (case-insensitive lookup)
-    const normalizedClass = characterClass.toLowerCase();
+    // Standard D&D classes (case-insensitive, whitespace-tolerant lookup)
+    const normalizedClass = characterClass.trim().toLowerCase();
     const config = SPELLCASTING_CONFIG[normalizedClass as CharacterClass];
 
     if (config) {
