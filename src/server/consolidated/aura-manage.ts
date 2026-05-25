@@ -10,6 +10,7 @@ import { createActionRouter, ActionDefinition, McpResponse } from '../../utils/a
 import { SessionContext } from '../types.js';
 import { RichFormatter } from '../utils/formatter.js';
 import { getDb } from '../../storage/index.js';
+import { resolveConsolidatedDbPath } from './db-path.js';
 import { AuraRepository } from '../../storage/repos/aura.repo.js';
 import { EncounterRepository } from '../../storage/repos/encounter.repo.js';
 import { CharacterRepository } from '../../storage/repos/character.repo.js';
@@ -39,7 +40,7 @@ type AuraManageAction = typeof ACTIONS[number];
 // ═══════════════════════════════════════════════════════════════════════════
 
 function ensureDb() {
-    const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
+    const db = getDb(resolveConsolidatedDbPath());
     return {
         auraRepo: new AuraRepository(db),
         encounterRepo: new EncounterRepository(db),

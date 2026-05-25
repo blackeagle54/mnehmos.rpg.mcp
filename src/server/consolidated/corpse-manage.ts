@@ -8,6 +8,7 @@ import { randomUUID } from 'crypto';
 import { createActionRouter, ActionDefinition, McpResponse } from '../../utils/action-router.js';
 import { CorpseRepository } from '../../storage/repos/corpse.repo.js';
 import { getDb } from '../../storage/index.js';
+import { resolveConsolidatedDbPath } from './db-path.js';
 import { SessionContext } from '../types.js';
 import { RichFormatter } from '../utils/formatter.js';
 
@@ -29,11 +30,7 @@ type CorpseAction = typeof ACTIONS[number];
 // ═══════════════════════════════════════════════════════════════════════════
 
 function getRepo(): CorpseRepository {
-    const dbPath = process.env.NODE_ENV === 'test'
-        ? ':memory:'
-        : process.env.RPG_DATA_DIR
-            ? `${process.env.RPG_DATA_DIR}/rpg.db`
-            : 'rpg.db';
+    const dbPath = resolveConsolidatedDbPath();
     const db = getDb(dbPath);
     return new CorpseRepository(db);
 }

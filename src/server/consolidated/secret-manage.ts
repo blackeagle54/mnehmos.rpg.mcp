@@ -18,6 +18,7 @@ import { randomUUID } from 'crypto';
 import { SecretRepository } from '../../storage/repos/secret.repo.js';
 import { RevealConditionSchema, GameEventSchema } from '../../schema/secret.js';
 import { getDb } from '../../storage/index.js';
+import { resolveConsolidatedDbPath } from './db-path.js';
 import { SessionContext } from '../types.js';
 import { createActionRouter, ActionDefinition, McpResponse } from '../../utils/action-router.js';
 
@@ -44,11 +45,7 @@ type SecretAction = typeof ACTIONS[number];
 // ═══════════════════════════════════════════════════════════════════════════
 
 function ensureDb() {
-    const dbPath = process.env.NODE_ENV === 'test'
-        ? ':memory:'
-        : process.env.RPG_DATA_DIR
-            ? `${process.env.RPG_DATA_DIR}/rpg.db`
-            : 'rpg.db';
+    const dbPath = resolveConsolidatedDbPath();
     const db = getDb(dbPath);
     const secretRepo = new SecretRepository(db);
     return { secretRepo };

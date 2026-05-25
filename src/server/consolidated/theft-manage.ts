@@ -11,6 +11,7 @@ import { createActionRouter, ActionDefinition, McpResponse } from '../../utils/a
 import { SessionContext } from '../types.js';
 import { RichFormatter } from '../utils/formatter.js';
 import { getDb } from '../../storage/index.js';
+import { resolveConsolidatedDbPath } from './db-path.js';
 import { TheftRepository } from '../../storage/repos/theft.repo.js';
 import { HeatLevelSchema, HEAT_VALUES, compareHeatLevels, HeatLevel } from '../../schema/theft.js';
 
@@ -26,7 +27,7 @@ type TheftManageAction = typeof ACTIONS[number];
 // ═══════════════════════════════════════════════════════════════════════════
 
 function getRepo(): TheftRepository {
-    const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
+    const db = getDb(resolveConsolidatedDbPath());
     return new TheftRepository(db);
 }
 

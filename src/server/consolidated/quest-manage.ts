@@ -11,6 +11,7 @@ import { createActionRouter, ActionDefinition, McpResponse } from '../../utils/a
 import { SessionContext } from '../types.js';
 import { RichFormatter } from '../utils/formatter.js';
 import { getDb } from '../../storage/index.js';
+import { resolveConsolidatedDbPath } from './db-path.js';
 import { QuestRepository } from '../../storage/repos/quest.repo.js';
 import { CharacterRepository } from '../../storage/repos/character.repo.js';
 import { InventoryRepository } from '../../storage/repos/inventory.repo.js';
@@ -29,11 +30,7 @@ type QuestManageAction = typeof ACTIONS[number];
 // ═══════════════════════════════════════════════════════════════════════════
 
 function ensureDb() {
-    const dbPath = process.env.NODE_ENV === 'test'
-        ? ':memory:'
-        : process.env.RPG_DATA_DIR
-            ? `${process.env.RPG_DATA_DIR}/rpg.db`
-            : 'rpg.db';
+    const dbPath = resolveConsolidatedDbPath();
     const db = getDb(dbPath);
     return {
         questRepo: new QuestRepository(db),
