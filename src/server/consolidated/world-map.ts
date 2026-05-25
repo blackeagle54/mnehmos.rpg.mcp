@@ -161,9 +161,12 @@ function extractResultData(result: McpResponse, actionType: string): Record<stri
     const isError = (result as { isError?: boolean }).isError === true;
     try {
         const data = JSON.parse(result.content[0].text);
-        return { success: !isError, actionType, ...data };
+        // `success` is computed AFTER the spread so it stays authoritative: a flagged
+        // error (isError) can never be upgraded to success by a contradictory body,
+        // while on the happy path the data's own `success` still refines it.
+        return { actionType, ...data, success: isError ? false : (data.success ?? true) };
     } catch {
-        return { success: !isError, actionType, rawData: result.content[0].text };
+        return { actionType, rawData: result.content[0].text, success: !isError };
     }
 }
 
