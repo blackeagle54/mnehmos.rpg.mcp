@@ -7,6 +7,7 @@ import { handleInventoryManage, InventoryManageTool } from '../../../src/server/
 import { handleItemManage } from '../../../src/server/consolidated/item-manage.js';
 import { getDb } from '../../../src/storage/index.js';
 import { CharacterRepository } from '../../../src/storage/repos/character.repo.js';
+import { InventoryRepository } from '../../../src/storage/repos/inventory.repo.js';
 import { randomUUID } from 'crypto';
 
 // Force test mode
@@ -360,6 +361,29 @@ describe('inventory_manage consolidated tool', () => {
                 action: 'use', characterId: testCharId, itemId: potionId
             }, ctx);
             expect(parseResult(good).success).toBe(true);
+        });
+
+        it('rejects a malformed healing expression without consuming the item (#36 — CodeRabbit)', async () => {
+            const potion = await handleItemManage({
+                action: 'create', name: 'Cursed Vial', type: 'consumable', weight: 0.5, value: 10,
+                properties: { healing: 'not-a-dice-expr' }
+            }, ctx);
+            const potionId = parseItemResult(potion).item.id;
+            await handleInventoryManage({
+                action: 'give', characterId: testCharId, itemId: potionId, quantity: 2
+            }, ctx);
+
+            const invRepo = new InventoryRepository(getDb(':memory:'));
+            const qtyBefore = invRepo.getInventory(testCharId).items.find((i: any) => i.itemId === potionId)?.quantity;
+
+            const result = await handleInventoryManage({
+                action: 'use', characterId: testCharId, itemId: potionId
+            }, ctx);
+            expect(parseResult(result).error).toBeDefined();
+
+            // A malformed expression must be rejected BEFORE the item is consumed.
+            const qtyAfter = invRepo.getInventory(testCharId).items.find((i: any) => i.itemId === potionId)?.quantity;
+            expect(qtyAfter).toBe(qtyBefore);
         });
 
         it('should accept "consume" alias', async () => {

@@ -271,14 +271,26 @@ const definitions: Record<InventoryAction, ActionDefinition> = {
 
             const baseEffect = item.properties?.effect || item.properties?.effects || 'No defined effect';
 
-            // Resolve healing + validate the target BEFORE consuming the item, so an
-            // invalid target can't burn the consumable with no effect. [#36, CodeRabbit]
-            const healingExpr = item.properties?.healing;
-            const hasHealing = typeof healingExpr === 'string' && healingExpr.trim().length > 0;
+            // Resolve healing BEFORE consuming the item: validate the target AND roll the
+            // (trimmed) dice expression up front, so a missing target or a malformed/padded
+            // expression can't burn the consumable. [#36, CodeRabbit]
+            const rawHealing = item.properties?.healing;
+            const healingExpr = typeof rawHealing === 'string' ? rawHealing.trim() : '';
+            const hasHealing = healingExpr.length > 0;
+
             const targetId = params.targetId || params.characterId;
             const target = hasHealing ? charRepo.findById(targetId) : undefined;
             if (hasHealing && !target) {
                 throw new Error(`Target character not found: ${targetId}`);
+            }
+
+            let rolled: number | undefined;
+            if (hasHealing) {
+                try {
+                    rolled = Number(new DiceEngine().roll(healingExpr).result) || 0;
+                } catch {
+                    throw new Error(`Invalid healing expression "${healingExpr}" on item "${item.name}"`);
+                }
             }
 
             const removed = inventoryRepo.removeItem(params.characterId, params.itemId, 1);
@@ -289,8 +301,7 @@ const definitions: Record<InventoryAction, ActionDefinition> = {
             let healing: number | undefined;
             let hpBefore: number | undefined;
             let hpAfter: number | undefined;
-            if (target && typeof healingExpr === 'string') {
-                const rolled = Number(new DiceEngine().roll(healingExpr).result) || 0;
+            if (target && rolled !== undefined) {
                 hpBefore = target.hp;
                 hpAfter = Math.min(target.maxHp, target.hp + rolled);
                 healing = hpAfter - hpBefore;
