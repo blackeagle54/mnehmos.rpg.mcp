@@ -144,6 +144,22 @@ describe('improvisation_manage consolidated tool', () => {
             expect(typeof data.success).toBe('boolean');
         });
 
+        // #32: narrativeIntent was required, so a stunt couldn't resolve without it.
+        // It should default so the action works (resolving, not a validation error).
+        it('resolves a stunt without narrativeIntent (defaults it) (#32)', async () => {
+            const result = await handleImprovisationManage({
+                action: 'stunt',
+                actorId: testCharacterId,
+                skill: 'acrobatics',
+                dc: 15
+                // no narrativeIntent
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.actionType).toBe('stunt'); // resolved, not invalid_action / validation_error
+            expect(typeof data.success).toBe('boolean');
+        });
+
         it('should apply damage on successful stunt with successDamage', async () => {
             const result = await handleImprovisationManage({
                 action: 'stunt',
@@ -542,6 +558,23 @@ describe('improvisation_manage consolidated tool', () => {
             expect(data.actionType).toBe('synthesize');
             expect(data.spellName).toContain('Firebolt');
             expect(['mastery', 'success', 'fizzle', 'backfire', 'catastrophic']).toContain(data.outcome);
+        });
+
+        // #32 (parallel): synthesize had the same required narrativeIntent.
+        it('attempts synthesis without narrativeIntent (defaults it) (#32)', async () => {
+            const result = await handleImprovisationManage({
+                action: 'synthesize',
+                casterId: testCharacterId,
+                estimatedLevel: 1,
+                school: 'evocation',
+                effectType: 'damage',
+                targetingType: 'single',
+                targetingRange: 60
+                // no narrativeIntent — all other required fields present
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.actionType).toBe('synthesize'); // resolved, not a validation error
         });
 
         it('should factor in spell level for DC', async () => {

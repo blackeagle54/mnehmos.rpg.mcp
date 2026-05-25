@@ -126,7 +126,8 @@ const StuntSchema = z.object({
     actorType: z.enum(['character', 'npc']).default('character'),
     targetIds: z.array(z.string()).optional(),
     targetTypes: z.array(z.enum(['character', 'npc'])).optional(),
-    narrativeIntent: z.string(),
+    narrativeIntent: z.string().default('Improvised action')
+        .describe('What the actor is attempting; defaults to "Improvised action" if omitted'),
     skill: SkillEnum,
     dc: z.number().int().min(5).max(35),
     advantage: z.boolean().optional(),
@@ -200,7 +201,8 @@ const SynthesizeSchema = z.object({
     action: z.literal('synthesize'),
     casterId: z.string(),
     casterType: z.enum(['character', 'npc']).default('character'),
-    narrativeIntent: z.string(),
+    narrativeIntent: z.string().default('Improvised arcane effect')
+        .describe('Intended effect of the synthesized spell; defaults if omitted'),
     proposedName: z.string().optional(),
     estimatedLevel: z.number().int().min(1).max(9),
     school: SchoolEnum,
