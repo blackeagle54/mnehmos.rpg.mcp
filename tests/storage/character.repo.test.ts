@@ -49,6 +49,28 @@ describe('CharacterRepository', () => {
         expect(retrieved).toMatchObject(character);
     });
 
+    it('persists xp through create and update (#30)', () => {
+        const character: Character = {
+            id: 'char-xp',
+            name: 'XP Hero',
+            stats: { str: 10, dex: 10, con: 10, int: 10, wis: 10, cha: 10 },
+            hp: 20,
+            maxHp: 20,
+            ac: 15,
+            level: 1,
+            characterType: 'pc',
+            xp: 50,
+            createdAt: FIXED_TIMESTAMP,
+            updatedAt: FIXED_TIMESTAMP,
+        };
+
+        repo.create(character);
+        expect((repo.findById('char-xp') as Character).xp).toBe(50); // persisted on create
+
+        repo.update('char-xp', { xp: 150 } as Partial<Character>);
+        expect((repo.findById('char-xp') as Character).xp).toBe(150); // persisted on update
+    });
+
     it('should create and retrieve an NPC', () => {
         const npc: NPC = {
             id: 'npc-1',
