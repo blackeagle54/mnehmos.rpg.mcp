@@ -16,6 +16,8 @@ import { getDb } from '../../storage/index.js';
 import { CharacterRepository } from '../../storage/repos/character.repo.js';
 import { PartyRepository } from '../../storage/repos/party.repo.js';
 import { EncounterRepository } from '../../storage/repos/encounter.repo.js';
+import { POIRepository } from '../../storage/repos/poi.repo.js';
+import { SpatialRepository } from '../../storage/repos/spatial.repo.js';
 import { SessionContext } from '../types.js';
 import { CombatEngine, CombatParticipant } from '../../engine/combat/engine.js';
 import { getCombatManager } from '../state/combat-manager.js';
@@ -136,7 +138,9 @@ function ensureDb() {
         db,
         charRepo: new CharacterRepository(db),
         partyRepo: new PartyRepository(db),
-        encounterRepo: new EncounterRepository(db)
+        encounterRepo: new EncounterRepository(db),
+        poiRepo: new POIRepository(db),
+        spatialRepo: new SpatialRepository(db)
     };
 }
 
@@ -314,7 +318,7 @@ async function handleSpawnCharacter(input: SpawnManageInput, _ctx: SessionContex
 }
 
 async function handleSpawnLocation(input: SpawnManageInput, _ctx: SessionContext): Promise<McpResponse> {
-    const { charRepo, db } = ensureDb();
+    const { charRepo, spatialRepo } = ensureDb();
     const now = new Date().toISOString();
 
     const locationId = randomUUID();
@@ -346,24 +350,28 @@ async function handleSpawnLocation(input: SpawnManageInput, _ctx: SessionContext
         }
     }
 
-    // Create rooms if provided
+    // Create rooms as proper room_nodes via the spatial repository. [#26]
     const createdRooms: Array<{ id: string; name: string }> = [];
     if (input.rooms && input.rooms.length > 0) {
+        const biome = /dungeon|cave|crypt/i.test(input.locationType || '') ? 'dungeon'
+            : /forest|wood|wild|grove/i.test(input.locationType || '') ? 'forest'
+            : 'urban';
         for (const roomData of input.rooms) {
             const roomId = randomUUID();
-            // Store room in database (simplified - real impl would use room repo)
-            db.prepare(`
-                INSERT OR REPLACE INTO rooms (id, networkId, name, description, exits, createdAt, updatedAt)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            `).run(
-                roomId,
-                locationId,
-                roomData.name,
-                roomData.description || '',
-                JSON.stringify(roomData.exits || []),
-                now,
-                now
-            );
+            const desc = roomData.description || `${roomData.name} in ${locationName}.`;
+            const baseDescription = desc.length >= 10 ? desc : `${desc} (part of ${locationName}).`;
+            spatialRepo.create({
+                id: roomId,
+                name: roomData.name,
+                baseDescription,
+                biomeContext: biome,
+                atmospherics: [],
+                exits: [],
+                entityIds: [],
+                createdAt: now,
+                updatedAt: now,
+                visitedCount: 0
+            } as any);
             createdRooms.push({ id: roomId, name: roomData.name });
         }
     }
@@ -659,7 +667,7 @@ async function handleSpawnPresetLocation(input: SpawnManageInput, _ctx: SessionC
         };
     }
 
-    const { db, charRepo } = ensureDb();
+    const { charRepo, poiRepo, spatialRepo } = ensureDb();
     const now = new Date().toISOString();
 
     // Location presets (simplified - real impl would use data files)
@@ -710,32 +718,49 @@ async function handleSpawnPresetLocation(input: SpawnManageInput, _ctx: SessionC
     const locationId = randomUUID();
     const locationName = input.customName || presetData.name;
 
-    // Create POI
-    const poiId = randomUUID();
-    db.prepare(`
-        INSERT OR REPLACE INTO pois (id, worldId, name, type, x, y, discoveryState, networkId, createdAt, updatedAt)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-        poiId,
-        input.worldId,
-        locationName,
-        presetData.type,
-        input.x,
-        input.y,
-        input.discoveryState || 'discovered',
-        locationId,
-        now,
-        now
-    );
+    // Map the preset's loose "type" to a real POI category/icon + room biome. [#26]
+    const META: Record<string, { category: string; icon: string; biome: string }> = {
+        tavern: { category: 'commercial', icon: 'inn', biome: 'urban' },
+        dungeon: { category: 'dungeon', icon: 'cave', biome: 'dungeon' },
+        wilderness: { category: 'natural', icon: 'tree', biome: 'forest' }
+    };
+    const meta = META[presetData.type] || { category: 'landmark', icon: 'unknown', biome: 'forest' };
 
-    // Create rooms
+    // Create the POI via the repository (correct snake_case schema; table ensured). [#26]
+    const poiId = randomUUID();
+    poiRepo.create({
+        id: poiId,
+        worldId: input.worldId,
+        x: Math.floor(input.x),
+        y: Math.floor(input.y),
+        name: locationName,
+        category: meta.category,
+        icon: meta.icon,
+        networkId: locationId,
+        discoveryState: input.discoveryState || 'discovered',
+        createdAt: now,
+        updatedAt: now
+    } as any);
+
+    // Create rooms as proper room_nodes via the spatial repository. [#26]
     const createdRooms: Array<{ id: string; name: string }> = [];
     for (const roomData of presetData.rooms) {
         const roomId = randomUUID();
-        db.prepare(`
-            INSERT OR REPLACE INTO rooms (id, networkId, name, description, exits, createdAt, updatedAt)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        `).run(roomId, locationId, roomData.name, roomData.description, '[]', now, now);
+        const baseDescription = roomData.description.length >= 10
+            ? roomData.description
+            : `${roomData.description} — part of ${locationName}.`;
+        spatialRepo.create({
+            id: roomId,
+            name: roomData.name,
+            baseDescription,
+            biomeContext: meta.biome,
+            atmospherics: [],
+            exits: [],
+            entityIds: [],
+            createdAt: now,
+            updatedAt: now,
+            visitedCount: 0
+        } as any);
         createdRooms.push({ id: roomId, name: roomData.name });
     }
 
