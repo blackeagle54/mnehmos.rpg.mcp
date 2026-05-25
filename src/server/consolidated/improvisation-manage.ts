@@ -679,6 +679,8 @@ export const ImprovisationManageTool = {
 Actions: stunt, apply_effect, get_effects, remove_effect, process_triggers, advance_durations, synthesize, get_spellbook
 Aliases: rule_of_cool->stunt, boon/curse->apply_effect, dispel->remove_effect, arcane_synthesis->synthesize
 
+apply_effect requires: targetId, targetType (character|npc), name, category (boon|curse|neutral|transformative), mechanics (an array; use [] for a purely narrated effect), durationType (rounds|minutes|hours|days|permanent|until_removed). sourceType: divine|arcane|natural|cursed|psionic|unknown (default unknown).
+
 STUNT (Rule of Cool):
 - DC 5-30 based on difficulty
 - Supports advantage/disadvantage
@@ -715,17 +717,19 @@ ARCANE SYNTHESIS:
         savingThrowAbility: z.string().optional(),
         savingThrowDc: z.number().optional(),
         halfDamageOnSave: z.boolean().optional(),
-        // Effect params
-        targetId: z.string().optional(),
-        targetType: z.string().optional(),
-        name: z.string().optional(),
+        // Effect params (apply_effect). Required at the action level, but the
+        // multi-action tool schema must mark them optional here — so document the
+        // real per-action contract in the descriptions. (#71)
+        targetId: z.string().optional().describe('apply_effect: target entity ID (required)'),
+        targetType: z.string().optional().describe('apply_effect: "character" | "npc" (required)'),
+        name: z.string().optional().describe('apply_effect: effect name (required)'),
         description: z.string().optional(),
-        category: z.string().optional(),
-        powerLevel: z.number().optional(),
-        sourceType: z.string().optional(),
+        category: z.string().optional().describe('apply_effect: boon | curse | neutral | transformative (required)'),
+        powerLevel: z.number().optional().describe('apply_effect: 1-5 (default 1)'),
+        sourceType: z.string().optional().describe('apply_effect: divine | arcane | natural | cursed | psionic | unknown (default unknown)'),
         sourceEntityName: z.string().optional(),
-        mechanics: z.array(z.any()).optional(),
-        durationType: z.string().optional(),
+        mechanics: z.array(z.any()).optional().describe('apply_effect: required array of {type,value,condition?}; [] is valid for a purely narrated effect'),
+        durationType: z.string().optional().describe('apply_effect: rounds | minutes | hours | days | permanent | until_removed (required)'),
         durationValue: z.number().optional(),
         triggers: z.array(z.any()).optional(),
         effectId: z.number().optional(),

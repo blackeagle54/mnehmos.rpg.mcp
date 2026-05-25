@@ -256,6 +256,34 @@ describe('improvisation_manage consolidated tool', () => {
             expect(data.effect.name).toBe('Divine Protection');
         });
 
+        // #71: the published contract should document that mechanics is required but
+        // [] is valid for a purely narrated effect. Lock that behavior.
+        it('accepts apply_effect with empty mechanics for a purely narrated effect (#71)', async () => {
+            const result = await handleImprovisationManage({
+                action: 'apply_effect',
+                targetId: testCharacterId,
+                targetType: 'character',
+                name: 'Narrated Blessing',
+                category: 'boon',
+                sourceType: 'natural',
+                mechanics: [], // valid: narrated, not mechanically modeled
+                durationType: 'hours',
+                durationValue: 1
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.success).toBe(true);
+            expect(data.effect.name).toBe('Narrated Blessing');
+        });
+
+        it('documents apply_effect required fields and the canonical synthesize action (#71)', () => {
+            const desc = ImprovisationManageTool.description;
+            expect(desc).toContain('synthesize');
+            expect(desc).not.toContain('attempt_synthesis'); // stale name
+            // apply_effect's required fields should be discoverable from the description
+            expect(desc).toMatch(/apply_effect[\s\S]*targetId/i);
+        });
+
         it('should apply a curse effect', async () => {
             const result = await handleImprovisationManage({
                 action: 'apply_effect',
