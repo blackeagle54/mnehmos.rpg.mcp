@@ -225,6 +225,103 @@ describe('spatial_manage consolidated tool', () => {
         });
     });
 
+    describe('move by direction (#28)', () => {
+        let eastRoomId: string;
+
+        beforeEach(async () => {
+            const db = getDb(':memory:');
+            const spatialRepo = new SpatialRepository(db);
+
+            // Destination room reachable to the east of the test room.
+            eastRoomId = randomUUID();
+            spatialRepo.create({
+                id: eastRoomId,
+                name: 'East Room',
+                baseDescription: 'The room lying to the east of the test room.',
+                biomeContext: 'urban',
+                atmospherics: [],
+                exits: [],
+                entityIds: [],
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+                visitedCount: 0
+            });
+            // Link Test Room --east--> East Room.
+            spatialRepo.addExit(testRoomId, { direction: 'east', targetNodeId: eastRoomId, type: 'OPEN' });
+
+            // Place the character in the starting room so it has a currentRoomId.
+            await handleSpatialManage({
+                action: 'move', characterId: testCharacterId, roomId: testRoomId
+            }, ctx);
+        });
+
+        it('resolves a direction to the matching exit and moves there', async () => {
+            const result = await handleSpatialManage({
+                action: 'move',
+                characterId: testCharacterId,
+                direction: 'east'
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.success).toBe(true);
+            expect(data.actionType).toBe('move');
+            expect(data.newRoomId).toBe(eastRoomId);
+            expect(data.newRoomName).toBe('East Room');
+        });
+
+        it('errors when the current room has no exit in that direction', async () => {
+            const result = await handleSpatialManage({
+                action: 'move',
+                characterId: testCharacterId,
+                direction: 'west' // only an east exit exists
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.success).toBe(false);
+            expect(String(data.error)).toMatch(/no exit|west/i);
+        });
+
+        it('errors when moving by direction while not in any room', async () => {
+            const db = getDb(':memory:');
+            const characterRepo = new CharacterRepository(db);
+            const lostId = randomUUID();
+            characterRepo.create({
+                id: lostId,
+                name: 'Lost Wanderer',
+                level: 1,
+                hp: 20,
+                maxHp: 20,
+                ac: 12,
+                stats: { str: 10, dex: 10, con: 10, int: 10, wis: 14, cha: 10 },
+                inventory: [],
+                currency: { cp: 0, sp: 0, ep: 0, gp: 0, pp: 0 },
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString()
+            } as any);
+
+            const result = await handleSpatialManage({
+                action: 'move',
+                characterId: lostId,
+                direction: 'east'
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.success).toBe(false);
+            expect(String(data.error)).toMatch(/not in any room|current room/i);
+        });
+
+        it('errors when neither roomId nor direction is provided', async () => {
+            const result = await handleSpatialManage({
+                action: 'move',
+                characterId: testCharacterId
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.success).not.toBe(true);
+            expect(data.error).toBeDefined();
+        });
+    });
+
     describe('look action', () => {
         it('should require character to be in a room', async () => {
             const result = await handleSpatialManage({
