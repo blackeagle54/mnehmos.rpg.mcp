@@ -126,7 +126,7 @@ async function handleTravel(input: TravelManageInput, _ctx: SessionContext): Pro
     }
 
     // Check discovery state
-    let discovered = poi.discoveryState !== 'unknown';
+    let discovered = poi.discovery_state !== 'unknown';
     let discoveryRoll: number | null = null;
 
     if (!discovered && !input.autoDiscover) {
@@ -138,7 +138,7 @@ async function handleTravel(input: TravelManageInput, _ctx: SessionContext): Pro
         if (discoverer) {
             const wisBonus = Math.floor(((discoverer.stats?.wis || 10) - 10) / 2);
             discoveryRoll = Math.floor(Math.random() * 20) + 1 + wisBonus;
-            const dc = (poi.discoveryDc as number) || 15;
+            const dc = (poi.discovery_dc as number) || 15;
             discovered = discoveryRoll >= dc;
         }
     } else if (input.autoDiscover) {
@@ -161,22 +161,22 @@ async function handleTravel(input: TravelManageInput, _ctx: SessionContext): Pro
     }
 
     // Update POI discovery state
-    if (poi.discoveryState === 'unknown') {
-        db.prepare('UPDATE pois SET discoveryState = ?, updated_at = ? WHERE id = ?')
+    if (poi.discovery_state === 'unknown') {
+        db.prepare('UPDATE pois SET discovery_state = ?, updated_at = ? WHERE id = ?')
             .run('discovered', new Date().toISOString(), input.poiId);
     }
 
     // Update party position
-    db.prepare('UPDATE parties SET currentLocation = ?, updated_at = ? WHERE id = ?')
+    db.prepare('UPDATE parties SET current_location = ?, updated_at = ? WHERE id = ?')
         .run(poi.name, new Date().toISOString(), input.partyId);
 
     // Enter location if requested
     let enteredRoom: Record<string, unknown> | null = null;
-    if (input.enterLocation && poi.networkId) {
+    if (input.enterLocation && poi.network_id) {
         try {
             enteredRoom = db.prepare(`
-                SELECT * FROM rooms WHERE networkId = ? ORDER BY createdAt LIMIT 1
-            `).get(poi.networkId) as Record<string, unknown> | null;
+                SELECT * FROM room_nodes WHERE network_id = ? ORDER BY created_at LIMIT 1
+            `).get(poi.network_id) as Record<string, unknown> | null;
         } catch {
             // Rooms table might not exist
         }
