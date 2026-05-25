@@ -177,6 +177,17 @@ describe('spawn_manage consolidated tool', () => {
             expect(network?.centerY).toBe(7);
         });
 
+        it('rejects a malformed position instead of silently using (0,0) (#26 — CodeRabbit)', async () => {
+            const result = await handleSpawnManage({
+                action: 'spawn_location',
+                name: 'Broken Place',
+                rooms: [{ name: 'Room', description: 'A plain room here' }],
+                position: 'not-coords'
+            }, ctx);
+            const data = parseResult(result);
+            expect(data.error).toBe(true);
+        });
+
         it('should create location without NPCs', async () => {
             const result = await handleSpawnManage({
                 action: 'spawn_location',

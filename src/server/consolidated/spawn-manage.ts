@@ -356,16 +356,32 @@ async function handleSpawnLocation(input: SpawnManageInput, _ctx: SessionContext
         const biome = /dungeon|cave|crypt/i.test(input.locationType || '') ? 'dungeon'
             : /forest|wood|wild|grove/i.test(input.locationType || '') ? 'forest'
             : 'urban';
-        // Coords from x/y or the "x,y" position string (avoids all networks at 0,0). [#26, CodeRabbit]
-        const [posX, posY] = (input.position || '').split(',').map((s) => parseInt(s.trim(), 10));
+        // Resolve coords from x/y or a "x,y" position string; reject a malformed
+        // position rather than silently writing (0,0). [#26, CodeRabbit]
+        let centerX = input.x ?? 0;
+        let centerY = input.y ?? 0;
+        if (input.position !== undefined) {
+            const parts = input.position.split(',').map((s) => Number(s.trim()));
+            if (parts.length !== 2 || !parts.every((n) => Number.isInteger(n) && n >= 0)) {
+                return {
+                    content: [{
+                        type: 'text',
+                        text: RichFormatter.error(`Invalid position "${input.position}" — expected "x,y" non-negative integers`) +
+                            RichFormatter.embedJson({ error: true, message: 'Invalid position' }, 'SPAWN_MANAGE')
+                    }]
+                };
+            }
+            centerX = input.x ?? parts[0];
+            centerY = input.y ?? parts[1];
+        }
         // Create the room network first so room_nodes can link to it (FK). [#26]
         spatialRepo.createNetwork({
             id: locationId,
             name: locationName,
             type: 'cluster',
             worldId: input.worldId || 'local',
-            centerX: input.x ?? (Number.isFinite(posX) ? posX : 0),
-            centerY: input.y ?? (Number.isFinite(posY) ? posY : 0),
+            centerX,
+            centerY,
             createdAt: now,
             updatedAt: now
         } as any);
