@@ -602,6 +602,36 @@ describe('inventory_manage consolidated tool', () => {
             const data = parseResult(result);
             expect(data.success).toBe(true);
         });
+
+        it('shows item names — not raw IDs — and the character\'s gold (#27)', async () => {
+            // Provision gold so we can prove it surfaces. The bug read inventory.gold
+            // (undefined → 0) instead of inventory.currency.gold.
+            const invRepo = new InventoryRepository(getDb(':memory:'));
+            invRepo.setCurrency(testCharId, { gold: 250 });
+
+            const result = await handleInventoryManage({
+                action: 'get',
+                characterId: testCharId
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.success).toBe(true);
+            expect(data.actionType).toBe('get');
+
+            // Bug #1: `get` used getInventory() → raw items {itemId,...} with no `.item`.
+            // Detailed items carry the resolved item record (and thus the name).
+            expect(data.inventory[0].item).toBeDefined();
+            expect(data.inventory[0].item.name).toBe('Test Sword');
+
+            // Bug #2: gold must reflect provisioned currency, not a phantom 0.
+            expect(data.gold).toBe(250);
+
+            // End-to-end: the RENDERED list (not the embedded JSON, which keeps the
+            // id for programmatic use) shows the NAME, not the UUID.
+            const rendered = result.content[0].text.split('<!-- INVENTORY_MANAGE_JSON')[0];
+            expect(rendered).toContain('Test Sword');
+            expect(rendered).not.toContain(testItemId);
+        });
     });
 
     describe('get_detailed action', () => {
@@ -645,6 +675,22 @@ describe('inventory_manage consolidated tool', () => {
 
             const data = parseResult(result);
             expect(data.success).toBe(true);
+        });
+
+        it('surfaces provisioned gold via currency.gold, not inventory.gold (#27)', async () => {
+            const invRepo = new InventoryRepository(getDb(':memory:'));
+            invRepo.setCurrency(testCharId, { gold: 99 });
+
+            const result = await handleInventoryManage({
+                action: 'get_detailed',
+                characterId: testCharId
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.success).toBe(true);
+            // Was always 0: the handler read `inventory.gold` but the value lives at
+            // `inventory.currency.gold`.
+            expect(data.gold).toBe(99);
         });
     });
 
