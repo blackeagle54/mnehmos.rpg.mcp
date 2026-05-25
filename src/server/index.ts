@@ -15,6 +15,7 @@ import { z } from 'zod';
 // Meta-tools and registry
 import { MetaTools, handleSearchTools, handleLoadToolSchema } from './meta-tools.js';
 import { buildConsolidatedRegistry } from './consolidated-registry.js';
+import { toolParamShape } from './tool-shape.js';
 // MINIMAL_SCHEMA removed - must pass actual schema for MCP SDK to pass arguments
 
 // PubSub and utilities
@@ -114,27 +115,26 @@ async function main() {
 
   const registry = buildConsolidatedRegistry();
   const toolCount = Object.keys(registry).length;
-  const sessionIdSchema = z.object({ sessionId: z.string().optional() });
-  
+
   for (const [toolName, entry] of Object.entries(registry)) {
-    // Handle all Zod schema types (object, omit, pick, etc.)
-    // .extend() only works on z.object(), so we use .and() which works universally
-    let extendedSchema: any;
-    if (typeof entry.schema.extend === 'function') {
-      // Standard z.object() - use .extend() for best performance
-      extendedSchema = entry.schema.extend({ sessionId: z.string().optional() });
-    } else if (typeof entry.schema.and === 'function') {
-      // .omit(), .pick(), or other transformed schemas - use .and()
-      extendedSchema = entry.schema.and(sessionIdSchema);
-    } else {
-      // Fallback: wrap in intersection
-      extendedSchema = z.intersection(entry.schema, sessionIdSchema);
+    // Build the ZodRawShape the MCP SDK expects, robustly unwrapping refined /
+    // intersected / wrapped schemas so a tool's parameters are never silently
+    // dropped to `{}` (which would make the tool invisible to the LLM). (#24)
+    const baseShape = toolParamShape(entry.schema as z.ZodTypeAny);
+    if (Object.keys(baseShape).length === 0) {
+      // Fail loud: a parameterless registration is almost certainly a schema bug,
+      // not an intent — surface it at startup instead of shipping a broken tool.
+      throw new Error(
+        `[Server] Tool "${toolName}" resolved to an empty parameter schema; ` +
+        `toolParamShape could not extract a shape from its inputSchema.`
+      );
     }
-    
+    const shape = { ...baseShape, sessionId: z.string().optional() };
+
     server.tool(
       toolName,
       entry.metadata.description,
-      extendedSchema.shape || extendedSchema._def?.schema?.shape || {},
+      shape,
       auditLogger.wrapHandler(
         toolName,
         withSession(entry.schema, entry.handler as any)
