@@ -339,6 +339,29 @@ describe('inventory_manage consolidated tool', () => {
             expect(charRepo.findById(testCharId)?.hp).toBe(10);
         });
 
+        it('rejects an unknown healing target without consuming the item (#36 — CodeRabbit)', async () => {
+            const potion = await handleItemManage({
+                action: 'create', name: 'Potion of Healing', type: 'consumable', weight: 0.5, value: 50,
+                properties: { healing: '2d4+2' }
+            }, ctx);
+            const potionId = parseItemResult(potion).item.id;
+            await handleInventoryManage({
+                action: 'give', characterId: testCharId, itemId: potionId, quantity: 1
+            }, ctx);
+
+            // Using on a non-existent target must fail...
+            const bad = await handleInventoryManage({
+                action: 'use', characterId: testCharId, itemId: potionId, targetId: 'does-not-exist'
+            }, ctx);
+            expect(parseResult(bad).error).toBeDefined();
+
+            // ...and must NOT have consumed the potion — a valid self-use still works.
+            const good = await handleInventoryManage({
+                action: 'use', characterId: testCharId, itemId: potionId
+            }, ctx);
+            expect(parseResult(good).success).toBe(true);
+        });
+
         it('should accept "consume" alias', async () => {
             const result = await handleInventoryManage({
                 action: 'consume',

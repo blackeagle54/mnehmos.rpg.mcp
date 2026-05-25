@@ -269,28 +269,32 @@ const definitions: Record<InventoryAction, ActionDefinition> = {
                 throw new Error(`Character does not have item "${item.name}"`);
             }
 
+            const baseEffect = item.properties?.effect || item.properties?.effects || 'No defined effect';
+
+            // Resolve healing + validate the target BEFORE consuming the item, so an
+            // invalid target can't burn the consumable with no effect. [#36, CodeRabbit]
+            const healingExpr = item.properties?.healing;
+            const hasHealing = typeof healingExpr === 'string' && healingExpr.trim().length > 0;
+            const targetId = params.targetId || params.characterId;
+            const target = hasHealing ? charRepo.findById(targetId) : undefined;
+            if (hasHealing && !target) {
+                throw new Error(`Target character not found: ${targetId}`);
+            }
+
             const removed = inventoryRepo.removeItem(params.characterId, params.itemId, 1);
             if (!removed) {
                 throw new Error(`Failed to consume item`);
             }
 
-            const baseEffect = item.properties?.effect || item.properties?.effects || 'No defined effect';
-
-            // Resolve healing dice (e.g. "2d4+2"): roll, apply to target HP (clamped), report. [#36]
-            const healingExpr = item.properties?.healing;
             let healing: number | undefined;
             let hpBefore: number | undefined;
             let hpAfter: number | undefined;
-            if (typeof healingExpr === 'string' && healingExpr.trim()) {
-                const targetId = params.targetId || params.characterId;
-                const target = charRepo.findById(targetId);
-                if (target) {
-                    const rolled = Number(new DiceEngine().roll(healingExpr).result) || 0;
-                    hpBefore = target.hp;
-                    hpAfter = Math.min(target.maxHp, target.hp + rolled);
-                    healing = hpAfter - hpBefore;
-                    charRepo.update(targetId, { hp: hpAfter });
-                }
+            if (target && typeof healingExpr === 'string') {
+                const rolled = Number(new DiceEngine().roll(healingExpr).result) || 0;
+                hpBefore = target.hp;
+                hpAfter = Math.min(target.maxHp, target.hp + rolled);
+                healing = hpAfter - hpBefore;
+                charRepo.update(targetId, { hp: hpAfter });
             }
 
             const effect = healing !== undefined
