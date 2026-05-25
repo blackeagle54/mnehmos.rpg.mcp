@@ -117,9 +117,18 @@ export function getDb(path?: string): Database.Database {
     if (!dbInstance) {
         const resolvedPath = resolveDbPath(path);
         console.error(`[Database] Initializing database at: ${resolvedPath}`);
-        dbInstance = initDB(resolvedPath);
+        // Keep the handle local until migration succeeds: if migrate() throws,
+        // don't publish a half-initialized singleton (which would be reused by the
+        // next getDb() and never retry migrations). Close the handle on failure. (#68)
+        const db = initDB(resolvedPath);
+        try {
+            migrate(db);
+        } catch (err) {
+            db.close();
+            throw err;
+        }
+        dbInstance = db;
         activeDbPath = resolvedPath;
-        migrate(dbInstance);
         return dbInstance;
     }
     // Process-global singleton: an explicit path that conflicts with the open
