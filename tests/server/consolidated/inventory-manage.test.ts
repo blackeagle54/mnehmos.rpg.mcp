@@ -7,6 +7,7 @@ import { handleInventoryManage, InventoryManageTool } from '../../../src/server/
 import { handleItemManage } from '../../../src/server/consolidated/item-manage.js';
 import { getDb } from '../../../src/storage/index.js';
 import { CharacterRepository } from '../../../src/storage/repos/character.repo.js';
+import { InventoryRepository } from '../../../src/storage/repos/inventory.repo.js';
 import { randomUUID } from 'crypto';
 
 // Force test mode
@@ -298,6 +299,93 @@ describe('inventory_manage consolidated tool', () => {
             expect(data.effect).toBe('Restore 2d4+2 HP');
         });
 
+        it('rolls properties.healing and applies HP to the target (#36)', async () => {
+            const db = getDb(':memory:');
+            const charRepo = new CharacterRepository(db);
+            // Damage the hero to 6/10 — any 2d4+2 (min 4) heals to full, so the
+            // clamp makes the result deterministic (hpAfter = 10, healing = 4).
+            charRepo.update(testCharId, { hp: 6 } as any);
+
+            const potion = await handleItemManage({
+                action: 'create',
+                name: 'Potion of Healing',
+                type: 'consumable',
+                weight: 0.5,
+                value: 50,
+                properties: { healing: '2d4+2' }
+            }, ctx);
+            const healingPotionId = parseItemResult(potion).item.id;
+
+            await handleInventoryManage({
+                action: 'give',
+                characterId: testCharId,
+                itemId: healingPotionId,
+                quantity: 1
+            }, ctx);
+
+            const result = await handleInventoryManage({
+                action: 'use',
+                characterId: testCharId,
+                itemId: healingPotionId
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.success).toBe(true);
+            expect(data.hpBefore).toBe(6);
+            expect(data.hpAfter).toBe(10);
+            expect(data.healing).toBe(4);
+            expect(String(data.effect)).toMatch(/heal|HP/i);
+
+            // HP change must be persisted
+            expect(charRepo.findById(testCharId)?.hp).toBe(10);
+        });
+
+        it('rejects an unknown healing target without consuming the item (#36 — CodeRabbit)', async () => {
+            const potion = await handleItemManage({
+                action: 'create', name: 'Potion of Healing', type: 'consumable', weight: 0.5, value: 50,
+                properties: { healing: '2d4+2' }
+            }, ctx);
+            const potionId = parseItemResult(potion).item.id;
+            await handleInventoryManage({
+                action: 'give', characterId: testCharId, itemId: potionId, quantity: 1
+            }, ctx);
+
+            // Using on a non-existent target must fail...
+            const bad = await handleInventoryManage({
+                action: 'use', characterId: testCharId, itemId: potionId, targetId: 'does-not-exist'
+            }, ctx);
+            expect(parseResult(bad).error).toBeDefined();
+
+            // ...and must NOT have consumed the potion — a valid self-use still works.
+            const good = await handleInventoryManage({
+                action: 'use', characterId: testCharId, itemId: potionId
+            }, ctx);
+            expect(parseResult(good).success).toBe(true);
+        });
+
+        it('rejects a malformed healing expression without consuming the item (#36 — CodeRabbit)', async () => {
+            const potion = await handleItemManage({
+                action: 'create', name: 'Cursed Vial', type: 'consumable', weight: 0.5, value: 10,
+                properties: { healing: 'not-a-dice-expr' }
+            }, ctx);
+            const potionId = parseItemResult(potion).item.id;
+            await handleInventoryManage({
+                action: 'give', characterId: testCharId, itemId: potionId, quantity: 2
+            }, ctx);
+
+            const invRepo = new InventoryRepository(getDb(':memory:'));
+            const qtyBefore = invRepo.getInventory(testCharId).items.find((i: any) => i.itemId === potionId)?.quantity;
+
+            const result = await handleInventoryManage({
+                action: 'use', characterId: testCharId, itemId: potionId
+            }, ctx);
+            expect(parseResult(result).error).toBeDefined();
+
+            // A malformed expression must be rejected BEFORE the item is consumed.
+            const qtyAfter = invRepo.getInventory(testCharId).items.find((i: any) => i.itemId === potionId)?.quantity;
+            expect(qtyAfter).toBe(qtyBefore);
+        });
+
         it('should accept "consume" alias', async () => {
             const result = await handleInventoryManage({
                 action: 'consume',
@@ -385,6 +473,41 @@ describe('inventory_manage consolidated tool', () => {
             const data = parseResult(result);
             expect(data.error).toBeDefined();
             expect(data.message).toContain('does not own');
+        });
+
+        it('rejects equipping a consumable in a weapon slot (#37)', async () => {
+            const potion = await handleItemManage({
+                action: 'create', name: 'Potion', type: 'consumable', weight: 0.5, value: 25
+            }, ctx);
+            const potionId = parseItemResult(potion).item.id;
+            await handleInventoryManage({
+                action: 'give', characterId: testCharId, itemId: potionId, quantity: 1
+            }, ctx);
+
+            const result = await handleInventoryManage({
+                action: 'equip', characterId: testCharId, itemId: potionId, slot: 'mainhand'
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.error).toBeDefined();
+            expect(String(data.message)).toMatch(/consumable|cannot equip|slot/i);
+        });
+
+        it('rejects equipping armor in the accessory slot (#37)', async () => {
+            const armor = await handleItemManage({
+                action: 'create', name: 'Plate Mail', type: 'armor', weight: 65, value: 1500
+            }, ctx);
+            const armorId = parseItemResult(armor).item.id;
+            await handleInventoryManage({
+                action: 'give', characterId: testCharId, itemId: armorId, quantity: 1
+            }, ctx);
+
+            const result = await handleInventoryManage({
+                action: 'equip', characterId: testCharId, itemId: armorId, slot: 'accessory'
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.error).toBeDefined();
         });
     });
 

@@ -377,4 +377,15 @@ describe('session_manage consolidated tool', () => {
             expect(text).toContain('<!-- SESSION_MANAGE_JSON');
         });
     });
+
+    describe('regression: character class display (#35)', () => {
+        it('shows the actual class in the party table, not the Adventurer fallback', async () => {
+            const result = await handleSessionManage({ action: 'initialize', partyId: testPartyId }, ctx);
+            const text = result.content[0].text;
+            // getPartyWithMembers exposes the class as `.class`; the renderer must read it
+            // rather than `.characterClass` (which is undefined → 'Adventurer').
+            expect(text).toContain('Fighter');
+            expect(text).not.toContain('Adventurer');
+        });
+    });
 });

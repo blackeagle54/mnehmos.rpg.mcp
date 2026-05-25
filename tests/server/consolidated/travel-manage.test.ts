@@ -50,33 +50,16 @@ describe('travel_manage consolidated tool', () => {
                 type TEXT,
                 x INTEGER,
                 y INTEGER,
-                discoveryState TEXT DEFAULT 'unknown',
-                discoveryDc INTEGER DEFAULT 15,
-                networkId TEXT,
+                discovery_state TEXT DEFAULT 'unknown',
+                discovery_dc INTEGER DEFAULT 15,
+                network_id TEXT,
                 created_at TEXT,
                 updated_at TEXT
             )
         `);
 
-        // Create rooms table
-        db.exec(`
-            CREATE TABLE IF NOT EXISTS rooms (
-                id TEXT PRIMARY KEY,
-                networkId TEXT,
-                name TEXT,
-                description TEXT,
-                exits TEXT,
-                createdAt TEXT,
-                updatedAt TEXT
-            )
-        `);
-
-        // Add currentLocation column to parties if needed
-        try {
-            db.exec(`ALTER TABLE parties ADD COLUMN currentLocation TEXT`);
-        } catch {
-            // Column might already exist
-        }
+        // Real schema uses room_nodes (created by migrations) and parties.current_location;
+        // no fake 'rooms' table or camelCase currentLocation column. (#34)
 
         // Create test characters
         const charRepo = new CharacterRepository(db);
@@ -147,7 +130,7 @@ describe('travel_manage consolidated tool', () => {
         // Create test POI
         testPoiId = randomUUID();
         db.prepare(`
-            INSERT INTO pois (id, worldId, name, type, x, y, discoveryState, discoveryDc, created_at, updated_at)
+            INSERT INTO pois (id, worldId, name, type, x, y, discovery_state, discovery_dc, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(testPoiId, 'world-1', 'Ancient Temple', 'dungeon', 50, 75, 'discovered', 15, now, now);
 
@@ -208,10 +191,26 @@ describe('travel_manage consolidated tool', () => {
             expect(data.discovered).toBe(true);
         });
 
+        it('persists party current_location to the real snake_case column (#34)', async () => {
+            const result = await handleTravelManage({
+                action: 'travel',
+                partyId: testPartyId,
+                poiId: testPoiId
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.success).toBe(true);
+
+            const db = getDb(':memory:');
+            const row = db.prepare('SELECT current_location FROM parties WHERE id = ?')
+                .get(testPartyId) as { current_location: string };
+            expect(row.current_location).toBe('Ancient Temple');
+        });
+
         it('should auto-discover undiscovered POI when flag set', async () => {
             // First set POI to unknown
             const db = getDb(':memory:');
-            db.prepare('UPDATE pois SET discoveryState = ? WHERE id = ?')
+            db.prepare('UPDATE pois SET discovery_state = ? WHERE id = ?')
                 .run('unknown', testPoiId);
 
             const result = await handleTravelManage({

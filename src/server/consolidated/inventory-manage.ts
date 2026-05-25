@@ -12,12 +12,23 @@ import { INVENTORY_LIMITS } from '../../schema/inventory.js';
 import { getDb } from '../../storage/index.js';
 import { SessionContext } from '../types.js';
 import { RichFormatter } from '../utils/formatter.js';
+import { DiceEngine } from '../../math/dice.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════════════
 
 const ACTIONS = ['give', 'remove', 'transfer', 'use', 'equip', 'unequip', 'get', 'get_detailed'] as const;
+
+// Which item types may occupy each equipment slot. [#37]
+const SLOT_ALLOWED_TYPES: Record<string, string[]> = {
+    mainhand: ['weapon'],
+    offhand: ['weapon', 'armor'], // weapon or shield (shields are type 'armor')
+    armor: ['armor'],
+    head: ['armor', 'misc'],
+    feet: ['armor', 'misc'],
+    accessory: ['misc'],
+};
 type InventoryAction = typeof ACTIONS[number];
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -239,7 +250,7 @@ const definitions: Record<InventoryAction, ActionDefinition> = {
     use: {
         schema: UseSchema,
         handler: async (params: z.infer<typeof UseSchema>) => {
-            const { inventoryRepo, itemRepo } = ensureDb();
+            const { inventoryRepo, itemRepo, charRepo } = ensureDb();
 
             const item = itemRepo.findById(params.itemId);
             if (!item) {
@@ -258,12 +269,48 @@ const definitions: Record<InventoryAction, ActionDefinition> = {
                 throw new Error(`Character does not have item "${item.name}"`);
             }
 
+            const baseEffect = item.properties?.effect || item.properties?.effects || 'No defined effect';
+
+            // Resolve healing BEFORE consuming the item: validate the target AND roll the
+            // (trimmed) dice expression up front, so a missing target or a malformed/padded
+            // expression can't burn the consumable. [#36, CodeRabbit]
+            const rawHealing = item.properties?.healing;
+            const healingExpr = typeof rawHealing === 'string' ? rawHealing.trim() : '';
+            const hasHealing = healingExpr.length > 0;
+
+            const targetId = params.targetId || params.characterId;
+            const target = hasHealing ? charRepo.findById(targetId) : undefined;
+            if (hasHealing && !target) {
+                throw new Error(`Target character not found: ${targetId}`);
+            }
+
+            let rolled: number | undefined;
+            if (hasHealing) {
+                try {
+                    rolled = Number(new DiceEngine().roll(healingExpr).result) || 0;
+                } catch {
+                    throw new Error(`Invalid healing expression "${healingExpr}" on item "${item.name}"`);
+                }
+            }
+
             const removed = inventoryRepo.removeItem(params.characterId, params.itemId, 1);
             if (!removed) {
                 throw new Error(`Failed to consume item`);
             }
 
-            const effect = item.properties?.effect || item.properties?.effects || 'No defined effect';
+            let healing: number | undefined;
+            let hpBefore: number | undefined;
+            let hpAfter: number | undefined;
+            if (target && rolled !== undefined) {
+                hpBefore = target.hp;
+                hpAfter = Math.min(target.maxHp, target.hp + rolled);
+                healing = hpAfter - hpBefore;
+                charRepo.update(targetId, { hp: hpAfter });
+            }
+
+            const effect = healing !== undefined
+                ? `Healed ${healing} HP (rolled ${healingExpr})`
+                : baseEffect;
 
             return {
                 success: true,
@@ -272,6 +319,7 @@ const definitions: Record<InventoryAction, ActionDefinition> = {
                 characterId: params.characterId,
                 targetId: params.targetId || params.characterId,
                 effect,
+                ...(healing !== undefined ? { healing, hpBefore, hpAfter } : {}),
                 message: `Used ${item.name}`
             };
         },
@@ -296,6 +344,14 @@ const definitions: Record<InventoryAction, ActionDefinition> = {
             const item = itemRepo.findById(params.itemId);
             if (!item) {
                 throw new Error(`Item not found: ${params.itemId}`);
+            }
+
+            // Validate the item type is allowed in the requested slot. [#37]
+            const allowedTypes = SLOT_ALLOWED_TYPES[params.slot] ?? [];
+            if (!allowedTypes.includes(item.type)) {
+                throw new Error(
+                    `Cannot equip ${item.type} "${item.name}" in ${params.slot} slot (allowed: ${allowedTypes.join(', ')})`
+                );
             }
 
             inventoryRepo.equipItem(params.characterId, params.itemId, params.slot);
