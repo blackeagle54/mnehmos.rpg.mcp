@@ -683,6 +683,9 @@ export function restoreAllSpellSlots(character: Character): Character {
     if (config.pactMagic) {
         // Warlock pact magic
         const warlockSlots = WARLOCK_SLOTS[character.level];
+        if (!warlockSlots) {
+            return character; // Level beyond the pact-slot table (1–20); nothing to restore
+        }
         return {
             ...character,
             pactMagicSlots: {
@@ -712,6 +715,9 @@ export function restorePactSlots(character: Character): Character {
     }
 
     const warlockSlots = WARLOCK_SLOTS[character.level];
+    if (!warlockSlots) {
+        return character; // Level beyond the pact-slot table (1–20); nothing to restore
+    }
     return {
         ...character,
         pactMagicSlots: {

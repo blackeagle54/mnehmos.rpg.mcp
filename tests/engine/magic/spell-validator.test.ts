@@ -17,6 +17,8 @@ import {
     hasSpellSlotAvailable,
     canCastSpells,
     getSpellcastingConfig,
+    restoreAllSpellSlots,
+    restorePactSlots,
 } from '../../../src/engine/magic/spell-validator.js';
 import type { Character } from '../../../src/schema/character.js';
 import type { CharacterClass } from '../../../src/schema/spell.js';
@@ -92,5 +94,13 @@ describe('spell-validator class lookup is case-insensitive and null-safe (#25)',
         expect(getSpellcastingConfig(undefined as unknown as string).canCast).toBe(false);
         // Mixed case + surrounding whitespace resolves to the real config.
         expect(getSpellcastingConfig('  WiZaRd  ').canCast).toBe(true);
+    });
+
+    it('restore functions do not crash for a warlock above the slot table (#25 — CodeRabbit)', () => {
+        // level has min(1) but no max(20), so level 21 is schema-valid yet beyond
+        // WARLOCK_SLOTS — the bare WARLOCK_SLOTS[level] access would throw.
+        const epicWarlock = makeCharacter({ characterClass: 'warlock', level: 21 });
+        expect(() => restoreAllSpellSlots(epicWarlock)).not.toThrow();
+        expect(() => restorePactSlots(epicWarlock)).not.toThrow();
     });
 });
