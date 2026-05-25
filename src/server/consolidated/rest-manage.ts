@@ -9,6 +9,7 @@
 import { z } from 'zod';
 import { SessionContext } from '../types.js';
 import { getDb } from '../../storage/index.js';
+import { resolveConsolidatedDbPath } from './db-path.js';
 import { CharacterRepository } from '../../storage/repos/character.repo.js';
 import { getCombatManager } from '../state/combat-manager.js';
 import { restoreAllSpellSlots, restorePactSlots, getSpellcastingConfig } from '../../engine/magic/spell-validator.js';
@@ -26,7 +27,7 @@ type RestAction = typeof ACTIONS[number];
 // ═══════════════════════════════════════════════════════════════════════════
 
 function ensureDb() {
-    const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
+    const db = getDb(resolveConsolidatedDbPath());
     return {
         characterRepo: new CharacterRepository(db)
     };

@@ -10,6 +10,7 @@ import { createActionRouter, ActionDefinition, McpResponse } from '../../utils/a
 import { SessionContext } from '../types.js';
 import { RichFormatter } from '../utils/formatter.js';
 import { getDb } from '../../storage/index.js';
+import { resolveConsolidatedDbPath } from './db-path.js';
 import { NpcMemoryRepository, Familiarity, Disposition, Importance } from '../../storage/repos/npc-memory.repo.js';
 import { CharacterRepository } from '../../storage/repos/character.repo.js';
 import { SpatialRepository } from '../../storage/repos/spatial.repo.js';
@@ -28,7 +29,7 @@ type NpcManageAction = typeof ACTIONS[number];
 // ═══════════════════════════════════════════════════════════════════════════
 
 function getRepo(): NpcMemoryRepository {
-    const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
+    const db = getDb(resolveConsolidatedDbPath());
     return new NpcMemoryRepository(db);
 }
 
@@ -232,7 +233,7 @@ async function handleGetContext(args: z.infer<typeof GetContextSchema>): Promise
 }
 
 async function handleInteract(args: z.infer<typeof InteractSchema>): Promise<object> {
-    const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
+    const db = getDb(resolveConsolidatedDbPath());
     const charRepo = new CharacterRepository(db);
     const spatialRepo = new SpatialRepository(db);
     const memoryRepo = new NpcMemoryRepository(db);

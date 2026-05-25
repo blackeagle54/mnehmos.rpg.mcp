@@ -9,6 +9,7 @@ import { randomUUID } from 'crypto';
 import { matchAction, isGuidingError } from '../../utils/fuzzy-enum.js';
 import { RichFormatter } from '../utils/formatter.js';
 import { getDb } from '../../storage/index.js';
+import { resolveConsolidatedDbPath } from './db-path.js';
 import { CharacterRepository } from '../../storage/repos/character.repo.js';
 import { InventoryRepository } from '../../storage/repos/inventory.repo.js';
 import { ItemRepository } from '../../storage/repos/item.repo.js';
@@ -58,11 +59,7 @@ const ALIASES: Record<string, BatchAction> = {
 };
 
 function ensureDb() {
-    const dbPath = process.env.NODE_ENV === 'test'
-        ? ':memory:'
-        : process.env.RPG_DATA_DIR
-            ? `${process.env.RPG_DATA_DIR}/rpg.db`
-            : 'rpg.db';
+    const dbPath = resolveConsolidatedDbPath();
     const db = getDb(dbPath);
     return {
         db,

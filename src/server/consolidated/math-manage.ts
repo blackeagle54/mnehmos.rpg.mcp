@@ -14,6 +14,7 @@ import { PhysicsEngine } from '../../math/physics.js';
 import { ExportEngine } from '../../math/export.js';
 import { CalculationRepository, StoredCalculation } from '../../storage/repos/calculation.repo.js';
 import { getDb } from '../../storage/index.js';
+import { resolveConsolidatedDbPath } from './db-path.js';
 import { ExportFormatSchema } from '../../math/schemas.js';
 import { randomUUID } from 'crypto';
 import type Database from 'better-sqlite3';
@@ -32,7 +33,7 @@ type MathAction = typeof ACTIONS[number];
 // ═══════════════════════════════════════════════════════════════════════════
 
 function getRepo() {
-    const dbPath = process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db';
+    const dbPath = resolveConsolidatedDbPath();
     const db = getDb(dbPath);
     return { repo: new CalculationRepository(db), db };
 }

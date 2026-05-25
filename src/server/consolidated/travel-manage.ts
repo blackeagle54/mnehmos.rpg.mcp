@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { matchAction, isGuidingError } from '../../utils/fuzzy-enum.js';
 import { RichFormatter } from '../utils/formatter.js';
 import { getDb } from '../../storage/index.js';
+import { resolveConsolidatedDbPath } from './db-path.js';
 import { CharacterRepository } from '../../storage/repos/character.repo.js';
 import { PartyRepository } from '../../storage/repos/party.repo.js';
 import { CorpseRepository } from '../../storage/repos/corpse.repo.js';
@@ -39,11 +40,7 @@ const ALIASES: Record<string, TravelAction> = {
 };
 
 function ensureDb() {
-    const dbPath = process.env.NODE_ENV === 'test'
-        ? ':memory:'
-        : process.env.RPG_DATA_DIR
-            ? `${process.env.RPG_DATA_DIR}/rpg.db`
-            : 'rpg.db';
+    const dbPath = resolveConsolidatedDbPath();
     const db = getDb(dbPath);
     return {
         db,

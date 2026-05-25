@@ -21,6 +21,7 @@ import {
 } from '../handlers/combat-handlers.js';
 import { expandCreatureTemplate, listAllTemplates } from '../../data/creature-presets.js';
 import { getDb } from '../../storage/index.js';
+import { resolveConsolidatedDbPath } from './db-path.js';
 import { CombatActionLogRepository } from '../../storage/repos/combat-action-log.repo.js';
 import { EncounterRepository } from '../../storage/repos/encounter.repo.js';
 import { CombatEngine } from '../../engine/combat/engine.js';
@@ -301,7 +302,7 @@ const definitions: Record<CombatManageAction, ActionDefinition> = {
                 let loadedFromDb = false;
 
                 if (!engine) {
-                    const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
+                    const db = getDb(resolveConsolidatedDbPath());
                     const repo = new EncounterRepository(db);
                     const persisted = repo.loadState(params.encounterId);
                     if (persisted) {
@@ -325,7 +326,7 @@ const definitions: Record<CombatManageAction, ActionDefinition> = {
                     // DB state. Roll back the in-memory addParticipants and
                     // surface an explicit error.
                     try {
-                        const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
+                        const db = getDb(resolveConsolidatedDbPath());
                         const repo = new EncounterRepository(db);
                         repo.saveState(params.encounterId, state);
                     } catch (err) {
@@ -426,7 +427,7 @@ const definitions: Record<CombatManageAction, ActionDefinition> = {
     get_history: {
         schema: GetHistorySchema,
         handler: async (params: z.infer<typeof GetHistorySchema>) => {
-            const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
+            const db = getDb(resolveConsolidatedDbPath());
             const actionLogRepo = new CombatActionLogRepository(db);
 
             let actions;

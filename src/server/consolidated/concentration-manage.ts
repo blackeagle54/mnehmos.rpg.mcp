@@ -12,6 +12,7 @@
 import { z } from 'zod';
 import { SessionContext } from '../types.js';
 import { getDb } from '../../storage/index.js';
+import { resolveConsolidatedDbPath } from './db-path.js';
 import { CharacterRepository } from '../../storage/repos/character.repo.js';
 import { ConcentrationRepository } from '../../storage/repos/concentration.repo.js';
 import {
@@ -35,7 +36,7 @@ type ConcentrationAction = typeof ACTIONS[number];
 // ═══════════════════════════════════════════════════════════════════════════
 
 function ensureDb() {
-    const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
+    const db = getDb(resolveConsolidatedDbPath());
     return {
         characterRepo: new CharacterRepository(db),
         concentrationRepo: new ConcentrationRepository(db),

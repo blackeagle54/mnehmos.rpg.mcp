@@ -14,6 +14,7 @@ import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
 import { SessionContext } from '../types.js';
 import { getDb } from '../../storage/index.js';
+import { resolveConsolidatedDbPath } from './db-path.js';
 import { createActionRouter, ActionDefinition, McpResponse } from '../../utils/action-router.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -83,7 +84,7 @@ const SessionLogMetadata = z.object({
 // ═══════════════════════════════════════════════════════════════════════════
 
 function ensureDb() {
-    return getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
+    return getDb(resolveConsolidatedDbPath());
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

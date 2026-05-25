@@ -11,6 +11,7 @@ import { RichFormatter } from '../utils/formatter.js';
 import { handleExecuteCombatAction } from '../handlers/combat-handlers.js';
 import { getCombatManager } from '../state/combat-manager.js';
 import { getDb } from '../../storage/index.js';
+import { resolveConsolidatedDbPath } from './db-path.js';
 import { EncounterRepository } from '../../storage/repos/encounter.repo.js';
 import { CombatEngine } from '../../engine/combat/engine.js';
 
@@ -207,7 +208,7 @@ const definitions: Record<CombatAction, ActionDefinition> = {
             // wrap the create in a try/get fallback — the loser of the race
             // adopts the winner's engine.
             if (!engine) {
-                const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
+                const db = getDb(resolveConsolidatedDbPath());
                 const repo = new EncounterRepository(db);
                 const persisted = repo.loadState(params.encounterId);
                 if (persisted) {

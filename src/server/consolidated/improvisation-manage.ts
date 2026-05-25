@@ -11,6 +11,7 @@ import { createActionRouter, ActionDefinition, McpResponse } from '../../utils/a
 import { SessionContext } from '../types.js';
 import { RichFormatter } from '../utils/formatter.js';
 import { getDb } from '../../storage/index.js';
+import { resolveConsolidatedDbPath } from './db-path.js';
 import { CustomEffectsRepository } from '../../storage/repos/custom-effects.repo.js';
 import { CharacterRepository } from '../../storage/repos/character.repo.js';
 import {
@@ -60,7 +61,7 @@ const TriggerEventEnum = z.enum([
 // ═══════════════════════════════════════════════════════════════════════════
 
 function ensureDb() {
-    const dbPath = process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db';
+    const dbPath = resolveConsolidatedDbPath();
     const db = getDb(dbPath);
     const effectsRepo = new CustomEffectsRepository(db);
     const charRepo = new CharacterRepository(db);

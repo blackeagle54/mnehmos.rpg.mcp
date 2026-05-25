@@ -14,6 +14,7 @@ import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { SessionContext } from '../types.js';
 import { getDb } from '../../storage/index.js';
+import { resolveConsolidatedDbPath } from './db-path.js';
 import { CharacterRepository } from '../../storage/repos/character.repo.js';
 import { ItemRepository } from '../../storage/repos/item.repo.js';
 import { InventoryRepository } from '../../storage/repos/inventory.repo.js';
@@ -43,7 +44,7 @@ const SpellcastingClassEnum = z.enum([
 // ═══════════════════════════════════════════════════════════════════════════
 
 function ensureDb() {
-    const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
+    const db = getDb(resolveConsolidatedDbPath());
     return {
         characterRepo: new CharacterRepository(db),
         itemRepo: new ItemRepository(db),

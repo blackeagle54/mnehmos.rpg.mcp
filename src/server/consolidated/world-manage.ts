@@ -11,6 +11,7 @@ import { createActionRouter, ActionDefinition, McpResponse } from '../../utils/a
 import { SessionContext } from '../types.js';
 import { RichFormatter } from '../utils/formatter.js';
 import { getDb } from '../../storage/index.js';
+import { resolveConsolidatedDbPath } from './db-path.js';
 import { WorldRepository } from '../../storage/repos/world.repo.js';
 import { World } from '../../schema/world.js';
 import { generateWorld as generateWorldProc } from '../../engine/worldgen/index.js';
@@ -28,7 +29,7 @@ type WorldManageAction = typeof ACTIONS[number];
 // ═══════════════════════════════════════════════════════════════════════════
 
 function getWorldRepo(): WorldRepository {
-    const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
+    const db = getDb(resolveConsolidatedDbPath());
     return new WorldRepository(db);
 }
 

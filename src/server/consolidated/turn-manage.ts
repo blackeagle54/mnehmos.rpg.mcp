@@ -8,6 +8,7 @@ import { createActionRouter, ActionDefinition, McpResponse } from '../../utils/a
 import { SessionContext } from '../types.js';
 import { RichFormatter } from '../utils/formatter.js';
 import { getDb } from '../../storage/index.js';
+import { resolveConsolidatedDbPath } from './db-path.js';
 import { TurnStateRepository } from '../../storage/repos/turn-state.repo.js';
 import { NationRepository } from '../../storage/repos/nation.repo.js';
 import { DiplomacyRepository } from '../../storage/repos/diplomacy.repo.js';
@@ -30,7 +31,7 @@ type TurnAction = typeof ACTIONS[number];
 // ═══════════════════════════════════════════════════════════════════════════
 
 function getRepos() {
-    const dbPath = process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db';
+    const dbPath = resolveConsolidatedDbPath();
     const db = getDb(dbPath);
     return {
         turnStateRepo: new TurnStateRepository(db),
