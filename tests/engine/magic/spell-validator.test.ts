@@ -16,6 +16,7 @@ import {
     calculateSpellAttackBonus,
     hasSpellSlotAvailable,
     canCastSpells,
+    getSpellcastingConfig,
 } from '../../../src/engine/magic/spell-validator.js';
 import type { Character } from '../../../src/schema/character.js';
 import type { CharacterClass } from '../../../src/schema/spell.js';
@@ -83,5 +84,13 @@ describe('spell-validator class lookup is case-insensitive and null-safe (#25)',
         // the save-DC fix alone wouldn't make casting work end-to-end.
         const cleric = makeCharacter({ characterClass: '  Cleric  ' });
         expect(canCastSpells(cleric).canCast).toBe(true);
+    });
+
+    it('getSpellcastingConfig is null-safe and normalizes case + whitespace (#25 — CodeRabbit)', () => {
+        // Exported helper: harden against a null/undefined class (no .trim() crash).
+        expect(() => getSpellcastingConfig(undefined as unknown as string)).not.toThrow();
+        expect(getSpellcastingConfig(undefined as unknown as string).canCast).toBe(false);
+        // Mixed case + surrounding whitespace resolves to the real config.
+        expect(getSpellcastingConfig('  WiZaRd  ').canCast).toBe(true);
     });
 });

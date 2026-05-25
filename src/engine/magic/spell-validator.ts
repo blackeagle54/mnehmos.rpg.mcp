@@ -122,6 +122,15 @@ export interface SpellValidationResult {
 }
 
 /**
+ * Normalize a (possibly missing, mixed-case, or whitespace-padded) class name to
+ * the lowercase key used by SPELLCASTING_CONFIG. Single source of truth so all
+ * lookups stay case-insensitive and whitespace-tolerant. Defaults to 'fighter'.
+ */
+function normalizeClass(characterClass?: string | null): string {
+    return (characterClass ?? 'fighter').trim().toLowerCase();
+}
+
+/**
  * Get max spell level a character can cast based on class and level
  */
 export function getMaxSpellLevel(characterClass: CharacterClass, level: number): number {
@@ -245,7 +254,7 @@ function getAbilityModifier(character: Character, ability: SpellcastingAbility):
  * Check if character can cast spells at all
  */
 export function canCastSpells(character: Character): { canCast: boolean; reason?: string } {
-    const charClass = (character.characterClass || 'fighter').trim().toLowerCase() as CharacterClass;
+    const charClass = normalizeClass(character.characterClass) as CharacterClass;
     const config = SPELLCASTING_CONFIG[charClass];
 
     // Handle unknown/custom classes (monsters, NPCs, etc.)
@@ -291,7 +300,7 @@ export function characterKnowsSpell(character: Character, spellName: string): { 
         return { knows: false, reason: `Unknown spell: ${spellName}` };
     }
 
-    const charClass = (character.characterClass || 'fighter').trim().toLowerCase() as CharacterClass;
+    const charClass = normalizeClass(character.characterClass) as CharacterClass;
     const config = SPELLCASTING_CONFIG[charClass];
 
     // Handle unknown/custom classes (monsters, NPCs, etc.)
@@ -664,11 +673,10 @@ export function consumeSpellSlot(character: Character, slotLevel: number): Chara
  * Restore all spell slots (for long rest)
  */
 export function restoreAllSpellSlots(character: Character): Character {
-    const charClass = (character.characterClass || 'fighter').trim().toLowerCase() as CharacterClass;
-    const config = SPELLCASTING_CONFIG[charClass];
+    const config = getSpellcastingConfig(character.characterClass || 'fighter');
 
-    // Handle unknown/custom classes (monsters, NPCs, etc.)
-    if (!config || !config.canCast || character.level < config.startLevel) {
+    // Non-casters (incl. unknown/custom classes) and below-threshold levels: nothing to restore.
+    if (!config.canCast || character.level < config.startLevel) {
         return character;
     }
 
@@ -686,7 +694,7 @@ export function restoreAllSpellSlots(character: Character): Character {
     }
 
     // Standard spellcasting
-    const slots = getInitialSpellSlots(charClass as CharacterClass, character.level);
+    const slots = getInitialSpellSlots((character.characterClass || 'fighter') as CharacterClass, character.level);
     return {
         ...character,
         spellSlots: slots
@@ -697,11 +705,9 @@ export function restoreAllSpellSlots(character: Character): Character {
  * Restore warlock pact slots (for short rest)
  */
 export function restorePactSlots(character: Character): Character {
-    const charClass = (character.characterClass || 'fighter').trim().toLowerCase() as CharacterClass;
-    const config = SPELLCASTING_CONFIG[charClass];
+    const config = getSpellcastingConfig(character.characterClass || 'fighter');
 
-    // Handle unknown/custom classes (monsters, NPCs, etc.)
-    if (!config || !config.pactMagic) {
+    if (!config.pactMagic) {
         return character; // Not a warlock or unknown class
     }
 
@@ -723,8 +729,8 @@ export function restorePactSlots(character: Character): Character {
  * Returns default non-caster config for unknown/custom classes
  */
 export function getSpellcastingConfig(characterClass: string): SpellcastingConfig {
-    // Standard D&D classes (case-insensitive, whitespace-tolerant lookup)
-    const normalizedClass = characterClass.trim().toLowerCase();
+    // Standard D&D classes (case-insensitive, whitespace-tolerant, null-safe lookup)
+    const normalizedClass = normalizeClass(characterClass);
     const config = SPELLCASTING_CONFIG[normalizedClass as CharacterClass];
 
     if (config) {
