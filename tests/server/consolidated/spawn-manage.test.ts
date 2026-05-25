@@ -36,34 +36,8 @@ describe('spawn_manage consolidated tool', () => {
         const db = getDb(':memory:');
         const now = new Date().toISOString();
 
-        // Create rooms table for location spawning
-        db.exec(`
-            CREATE TABLE IF NOT EXISTS rooms (
-                id TEXT PRIMARY KEY,
-                networkId TEXT,
-                name TEXT,
-                description TEXT,
-                exits TEXT,
-                createdAt TEXT,
-                updatedAt TEXT
-            )
-        `);
-
-        // Create pois table for preset locations
-        db.exec(`
-            CREATE TABLE IF NOT EXISTS pois (
-                id TEXT PRIMARY KEY,
-                worldId TEXT,
-                name TEXT,
-                type TEXT,
-                x INTEGER,
-                y INTEGER,
-                discoveryState TEXT,
-                networkId TEXT,
-                createdAt TEXT,
-                updatedAt TEXT
-            )
-        `);
+        // Real schema only: pois is created by POIRepository, room_nodes by migrations.
+        // (No fake camelCase rooms/pois tables — those masked the #26 crash.)
 
         // Create a test world
         const worldRepo = new WorldRepository(db);
