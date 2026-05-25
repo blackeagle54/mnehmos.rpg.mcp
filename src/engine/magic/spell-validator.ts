@@ -125,7 +125,7 @@ export interface SpellValidationResult {
  * Get max spell level a character can cast based on class and level
  */
 export function getMaxSpellLevel(characterClass: CharacterClass, level: number): number {
-    const config = SPELLCASTING_CONFIG[characterClass];
+    const config = getSpellcastingConfig(characterClass);
     if (!config.canCast) return 0;
     if (level < config.startLevel) return 0;
 
@@ -159,7 +159,7 @@ export function getMaxSpellLevel(characterClass: CharacterClass, level: number):
  * Get initial spell slots for a character based on class and level
  */
 export function getInitialSpellSlots(characterClass: CharacterClass, level: number): SpellSlots {
-    const config = SPELLCASTING_CONFIG[characterClass];
+    const config = getSpellcastingConfig(characterClass);
     const empty: SpellSlots = {
         level1: { current: 0, max: 0 },
         level2: { current: 0, max: 0 },
@@ -204,7 +204,7 @@ export function getInitialSpellSlots(characterClass: CharacterClass, level: numb
  * DC = 8 + proficiency bonus + spellcasting ability modifier
  */
 export function calculateSpellSaveDC(character: Character): number {
-    const config = SPELLCASTING_CONFIG[(character.characterClass || 'fighter') as CharacterClass];
+    const config = getSpellcastingConfig(character.characterClass || 'fighter');
     if (!config.canCast) return 0;
 
     const profBonus = Math.floor((character.level - 1) / 4) + 2;
@@ -218,7 +218,7 @@ export function calculateSpellSaveDC(character: Character): number {
  * Attack = proficiency bonus + spellcasting ability modifier
  */
 export function calculateSpellAttackBonus(character: Character): number {
-    const config = SPELLCASTING_CONFIG[(character.characterClass || 'fighter') as CharacterClass];
+    const config = getSpellcastingConfig(character.characterClass || 'fighter');
     if (!config.canCast) return 0;
 
     const profBonus = Math.floor((character.level - 1) / 4) + 2;
@@ -357,8 +357,7 @@ export function characterKnowsSpell(character: Character, spellName: string): { 
  * Check if character has spell slot available at the given level
  */
 export function hasSpellSlotAvailable(character: Character, minLevel: number): { available: boolean; availableLevel?: number; reason?: string } {
-    const charClass = (character.characterClass || 'fighter') as CharacterClass;
-    const config = SPELLCASTING_CONFIG[charClass];
+    const config = getSpellcastingConfig(character.characterClass || 'fighter');
 
     if (config.pactMagic) {
         // Warlock uses pact magic
@@ -607,7 +606,7 @@ export function validateSpellCast(
     }
 
     // For Warlock, always use pact slot level
-    const config = SPELLCASTING_CONFIG[(character.characterClass || 'fighter') as CharacterClass];
+    const config = getSpellcastingConfig(character.characterClass || 'fighter');
     if (config.pactMagic) {
         targetSlotLevel = slotCheck.availableLevel!;
     }
@@ -623,8 +622,7 @@ export function validateSpellCast(
  * Consume a spell slot after successful cast
  */
 export function consumeSpellSlot(character: Character, slotLevel: number): Character {
-    const charClass = (character.characterClass || 'fighter') as CharacterClass;
-    const config = SPELLCASTING_CONFIG[charClass];
+    const config = getSpellcastingConfig(character.characterClass || 'fighter');
 
     if (config.pactMagic) {
         // Warlock pact magic
