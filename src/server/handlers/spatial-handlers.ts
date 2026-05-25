@@ -511,7 +511,11 @@ export async function handleMoveCharacterToRoom(
     const exit = currentRoom.exits.find(
       (e) => e.direction === parsed.direction
     );
-    if (!exit) {
+    // Mirror look_at_surroundings visibility: only OPEN exits are traversable by
+    // direction. A HIDDEN exit is reported as "no exit" so movement can't reveal a
+    // secret passage; a LOCKED exit is reported as locked. This prevents a
+    // direction move from bypassing exit state. (#28 — CodeRabbit)
+    if (!exit || exit.type === "HIDDEN") {
       return {
         content: [
           {
@@ -520,6 +524,23 @@ export async function handleMoveCharacterToRoom(
               {
                 success: false,
                 error: `No exit to the ${parsed.direction} from ${currentRoom.name}`,
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
+    if (exit.type !== "OPEN") {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(
+              {
+                success: false,
+                error: `The ${parsed.direction} exit from ${currentRoom.name} is ${exit.type.toLowerCase()}`,
               },
               null,
               2

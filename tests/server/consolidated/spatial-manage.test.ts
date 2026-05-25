@@ -320,6 +320,64 @@ describe('spatial_manage consolidated tool', () => {
             expect(data.success).not.toBe(true);
             expect(data.error).toBeDefined();
         });
+
+        it('does not traverse a LOCKED exit by direction (#28 — CodeRabbit)', async () => {
+            const db = getDb(':memory:');
+            const spatialRepo = new SpatialRepository(db);
+            const vaultId = randomUUID();
+            spatialRepo.create({
+                id: vaultId,
+                name: 'Locked Vault',
+                baseDescription: 'A vault sealed behind a locked door.',
+                biomeContext: 'dungeon',
+                atmospherics: [],
+                exits: [],
+                entityIds: [],
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+                visitedCount: 0
+            });
+            spatialRepo.addExit(testRoomId, { direction: 'south', targetNodeId: vaultId, type: 'LOCKED' });
+
+            const result = await handleSpatialManage({
+                action: 'move', characterId: testCharacterId, direction: 'south'
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.success).toBe(false);
+            expect(String(data.error)).toMatch(/locked/i);
+            expect(data.newRoomId).not.toBe(vaultId); // must not have moved in
+        });
+
+        it('does not traverse — or reveal — a HIDDEN exit by direction (#28 — CodeRabbit)', async () => {
+            const db = getDb(':memory:');
+            const spatialRepo = new SpatialRepository(db);
+            const secretId = randomUUID();
+            spatialRepo.create({
+                id: secretId,
+                name: 'Secret Chamber',
+                baseDescription: 'A chamber behind a concealed passage.',
+                biomeContext: 'dungeon',
+                atmospherics: [],
+                exits: [],
+                entityIds: [],
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+                visitedCount: 0
+            });
+            spatialRepo.addExit(testRoomId, { direction: 'down', targetNodeId: secretId, type: 'HIDDEN', dc: 15 });
+
+            const result = await handleSpatialManage({
+                action: 'move', characterId: testCharacterId, direction: 'down'
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.success).toBe(false);
+            // Reported as a plain "no exit" — must NOT leak that a hidden passage exists.
+            expect(String(data.error)).toMatch(/no exit/i);
+            expect(String(data.error)).not.toMatch(/hidden|secret/i);
+            expect(data.newRoomId).not.toBe(secretId);
+        });
     });
 
     describe('look action', () => {
