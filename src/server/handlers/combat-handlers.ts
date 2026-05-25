@@ -569,11 +569,14 @@ Example (use real UUID from context for player character!):
   ]
 }`,
         inputSchema: z.object({
-            seed: z.string().describe('Seed for deterministic combat resolution'),
+            seed: z.string().optional().describe('Seed for deterministic combat resolution (auto-generated if omitted)'),
             participants: z.array(z.object({
                 id: z.string(),
                 name: z.string(),
-                initiativeBonus: z.number().int(),
+                initiativeBonus: z.number().int().optional()
+                    .describe('Initiative modifier; the engine rolls d20 + this. Defaults to 0.'),
+                initiative: z.number().int().positive().optional()
+                    .describe('Pre-rolled initiative total (positive). If provided, used directly instead of rolling d20 + initiativeBonus.'),
                 hp: z.number().int().nonnegative(), // Allow 0 HP for dying characters
                 maxHp: z.number().int().positive(),
                 isEnemy: z.boolean().optional().describe('Whether this is an enemy (auto-detected if not set)'),
@@ -1053,8 +1056,12 @@ MAZE WITH ROOMS:
 export async function handleCreateEncounter(args: unknown, ctx: SessionContext) {
     const parsed = CombatTools.CREATE_ENCOUNTER.inputSchema.parse(args);
 
+    // Seed is an implementation detail for deterministic RNG; auto-generate one
+    // when the caller doesn't supply it. (#22)
+    const seed = parsed.seed ?? `combat-${randomUUID()}`;
+
     // Create combat engine
-    const engine = new CombatEngine(parsed.seed, pubsub || undefined);
+    const engine = new CombatEngine(seed, pubsub || undefined);
 
     // Convert participants to proper format (preserve isEnemy, position, and resistances)
     const participants: CombatParticipant[] = parsed.participants.map(p => {
@@ -1095,7 +1102,7 @@ export async function handleCreateEncounter(args: unknown, ctx: SessionContext) 
             name: preset ? preset.name : p.name,
             hp: p.hp,
             maxHp: p.maxHp,
-            initiative: 0, // Will be rolled
+            initiative: p.initiative ?? 0, // Pre-rolled value honored by startEncounter; 0 → rolled
             initiativeBonus: p.initiativeBonus ?? 0,
             isEnemy: p.isEnemy ?? false,
             hasLairActions: p.hasLairActions ?? false,
@@ -1122,7 +1129,7 @@ export async function handleCreateEncounter(args: unknown, ctx: SessionContext) 
     }
 
     // Generate encounter ID
-    const encounterId = `encounter-${parsed.seed}-${Date.now()}`;
+    const encounterId = `encounter-${seed}-${Date.now()}`;
     // Store with session namespace
     getCombatManager().create(`${ctx.sessionId}:${encounterId}`, engine);
 

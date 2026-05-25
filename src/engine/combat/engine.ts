@@ -244,9 +244,12 @@ export class CombatEngine {
     }
 
     startEncounter(participants: CombatParticipant[]): CombatState {
-        // Roll initiative for each participant and store the value
+        // Roll initiative for each participant and store the value. A caller may
+        // supply a pre-rolled initiative (> 0) — honor it instead of rolling. (#22)
         const participantsWithInitiative = participants.map(p => {
-            const rolledInitiative = this.rng.d20(p.initiativeBonus);
+            const rolledInitiative = (typeof p.initiative === 'number' && p.initiative > 0)
+                ? p.initiative
+                : this.rng.d20(p.initiativeBonus);
             return {
                 ...p,
                 ac: p.ac,
