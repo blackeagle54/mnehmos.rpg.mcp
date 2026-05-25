@@ -78,7 +78,9 @@ const CreateSchema = z.object({
     factionId: z.string().optional(),
     behavior: z.string().optional(),
     knownSpells: z.array(z.string()).optional().default([]),
-    preparedSpells: z.array(z.string()).optional().default([]),
+    // No .default([]) here: omitted (undefined) must stay distinct from an explicit
+    // empty list so we only auto-prepare known spells when no list was given. (#23)
+    preparedSpells: z.array(z.string()).optional(),
     resistances: z.array(z.string()).optional().default([]),
     vulnerabilities: z.array(z.string()).optional().default([]),
     immunities: z.array(z.string()).optional().default([]),
@@ -191,8 +193,9 @@ async function handleCreate(args: z.infer<typeof CreateSchema>): Promise<object>
 
     // #23: when no prepared list is given, auto-prepare known spells so a fresh
     // prepare-caster (wizard/cleric/…) can actually cast without a separate update.
-    // An explicit preparedSpells list is always respected.
-    const explicitlyPrepared = (args.preparedSpells?.length ?? 0) > 0;
+    // An explicit preparedSpells list — including an explicit empty [] meaning
+    // "prepare nothing" — is always respected.
+    const explicitlyPrepared = args.preparedSpells !== undefined;
 
     // Build the base character record from args. The character row MUST be
     // inserted before provisioning runs, otherwise inventory_items.character_id

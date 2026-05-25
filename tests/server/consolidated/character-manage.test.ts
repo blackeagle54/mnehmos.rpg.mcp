@@ -114,6 +114,21 @@ describe('character_manage consolidated tool', () => {
             expect(parsed.preparedSpells).toEqual(['Magic Missile']);
         });
 
+        it('respects an explicit empty preparedSpells (prepare nothing) (#23 — CodeRabbit)', async () => {
+            const result = await handleCharacterManage({
+                action: 'create',
+                name: 'Unprepared Wizard',
+                class: 'Wizard',
+                knownSpells: ['Magic Missile', 'Shield'],
+                preparedSpells: [], // explicit "prepare nothing" — must NOT be auto-filled
+                provisionEquipment: false
+            }, ctx);
+
+            const parsed = extractJson(result.content[0].text);
+            expect(parsed.success).toBe(true);
+            expect(parsed.preparedSpells).toEqual([]);
+        });
+
         it('should provision equipment by default for PCs', async () => {
             const result = await handleCharacterManage({
                 action: 'create',
