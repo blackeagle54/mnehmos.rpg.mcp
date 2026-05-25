@@ -7,6 +7,8 @@ import { migrate } from './migrations.js';
 
 let dbInstance: Database.Database | null = null;
 let configuredDbPath: string | null = null;
+// Resolved path of the currently-open singleton instance (null when uninitialized). (#68)
+let activeDbPath: string | null = null;
 
 /**
  * Get the platform-specific app data directory for rpg-mcp.
@@ -106,7 +108,9 @@ export function configureDbPath(path: string): void {
  * Get the configured or default database path (for logging/debugging).
  */
 export function getDbPath(): string {
-    return resolveDbPath();
+    // Report the ACTIVE instance's path once initialized; otherwise the path a
+    // fresh getDb() would resolve to. (#68)
+    return activeDbPath ?? resolveDbPath();
 }
 
 export function getDb(path?: string): Database.Database {
@@ -114,13 +118,30 @@ export function getDb(path?: string): Database.Database {
         const resolvedPath = resolveDbPath(path);
         console.error(`[Database] Initializing database at: ${resolvedPath}`);
         dbInstance = initDB(resolvedPath);
+        activeDbPath = resolvedPath;
         migrate(dbInstance);
+        return dbInstance;
+    }
+    // Process-global singleton: an explicit path that conflicts with the open
+    // instance is rejected rather than silently returning a different DB. (#68)
+    if (path !== undefined) {
+        const requested = resolveDbPath(path);
+        if (requested !== activeDbPath) {
+            throw new Error(
+                `[Database] Already initialized at "${activeDbPath}"; cannot open a different ` +
+                `path "${requested}". getDb() is a process-global singleton — call closeDb() ` +
+                `before switching databases.`
+            );
+        }
     }
     return dbInstance;
 }
 
 export function setDb(database: Database.Database) {
     dbInstance = database;
+    // better-sqlite3 exposes the opened path as `.name` (':memory:' for in-memory),
+    // so getDbPath() stays accurate for injected instances too. (#68)
+    activeDbPath = (database as { name?: string }).name ?? null;
 }
 
 /**
@@ -138,6 +159,7 @@ export function closeDb() {
         }
         dbInstance.close();
         dbInstance = null;
+        activeDbPath = null;
         console.error('[Database] Database closed');
     }
 }
