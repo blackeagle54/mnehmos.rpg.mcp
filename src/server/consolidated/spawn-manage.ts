@@ -318,7 +318,7 @@ async function handleSpawnCharacter(input: SpawnManageInput, _ctx: SessionContex
 }
 
 async function handleSpawnLocation(input: SpawnManageInput, _ctx: SessionContext): Promise<McpResponse> {
-    const { charRepo, spatialRepo } = ensureDb();
+    const { charRepo, spatialRepo, db } = ensureDb();
     const now = new Date().toISOString();
 
     const locationId = randomUUID();
@@ -374,36 +374,41 @@ async function handleSpawnLocation(input: SpawnManageInput, _ctx: SessionContext
             centerX = input.x ?? parts[0];
             centerY = input.y ?? parts[1];
         }
-        // Create the room network first so room_nodes can link to it (FK). [#26]
-        spatialRepo.createNetwork({
-            id: locationId,
-            name: locationName,
-            type: 'cluster',
-            worldId: input.worldId || 'local',
-            centerX,
-            centerY,
-            createdAt: now,
-            updatedAt: now
-        } as any);
-        for (const roomData of input.rooms) {
-            const roomId = randomUUID();
-            const desc = roomData.description || `${roomData.name} in ${locationName}.`;
-            const baseDescription = desc.length >= 10 ? desc : `${desc} (part of ${locationName}).`;
-            spatialRepo.create({
-                id: roomId,
-                name: roomData.name,
-                baseDescription,
-                biomeContext: biome,
-                networkId: locationId,
-                atmospherics: [],
-                exits: [],
-                entityIds: [],
+        // Atomic: the network and all its rooms commit together or not at all, so a
+        // failed room insert can't leave a partial/orphaned world. [#26, CodeRabbit]
+        const roomList = input.rooms;
+        db.transaction(() => {
+            // Create the room network first so room_nodes can link to it (FK). [#26]
+            spatialRepo.createNetwork({
+                id: locationId,
+                name: locationName,
+                type: 'cluster',
+                worldId: input.worldId || 'local',
+                centerX,
+                centerY,
                 createdAt: now,
-                updatedAt: now,
-                visitedCount: 0
+                updatedAt: now
             } as any);
-            createdRooms.push({ id: roomId, name: roomData.name });
-        }
+            for (const roomData of roomList) {
+                const roomId = randomUUID();
+                const desc = roomData.description || `${roomData.name} in ${locationName}.`;
+                const baseDescription = desc.length >= 10 ? desc : `${desc} (part of ${locationName}).`;
+                spatialRepo.create({
+                    id: roomId,
+                    name: roomData.name,
+                    baseDescription,
+                    biomeContext: biome,
+                    networkId: locationId,
+                    atmospherics: [],
+                    exits: [],
+                    entityIds: [],
+                    createdAt: now,
+                    updatedAt: now,
+                    visitedCount: 0
+                } as any);
+                createdRooms.push({ id: roomId, name: roomData.name });
+            }
+        })();
     }
 
     let output = RichFormatter.header('Location Spawned', '🏠');
