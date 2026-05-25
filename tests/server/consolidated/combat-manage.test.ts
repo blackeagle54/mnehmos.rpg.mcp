@@ -146,6 +146,9 @@ describe('combat_manage consolidated tool', () => {
             expect(data.success).toBe(true);
             expect(typeof data.encounterId).toBe('string');
             expect((data.encounterId as string).length).toBeGreaterThan(0);
+            // The pre-rolled initiative from the repro input must be honored, not rerolled.
+            const valeros = (data.participants as Array<{ id: string; initiative: number }>).find((p) => p.id === 'valeros');
+            expect(valeros?.initiative).toBe(15);
         });
 
         it('uses a pre-rolled participant `initiative` instead of rolling it (#22)', async () => {
