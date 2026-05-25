@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import { TurnState, TurnStateSchema } from '../../schema/turn-state.js';
+import { TurnState, TurnStateSchema, TurnAction } from '../../schema/turn-state.js';
 
 interface TurnStateRow {
     world_id: string;
@@ -72,11 +72,40 @@ export class TurnStateRepository {
 
     incrementTurn(worldId: string): void {
         const stmt = this.db.prepare(`
-            UPDATE turn_state 
+            UPDATE turn_state
             SET current_turn = current_turn + 1, updated_at = ?
             WHERE world_id = ?
         `);
         stmt.run(new Date().toISOString(), worldId);
+    }
+
+    // ── Submitted-action queue (#67): submit_actions records intent here; the
+    //    actions are applied to the world only at turn resolution. ──────────────
+
+    /** Replace a nation's queued actions for the given turn. */
+    queueActions(worldId: string, turn: number, nationId: string, actions: TurnAction[]): void {
+        const now = new Date().toISOString();
+        const stmt = this.db.prepare(`
+            INSERT INTO turn_action_queue (world_id, turn, nation_id, actions, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(world_id, turn, nation_id) DO UPDATE SET
+                actions = excluded.actions, updated_at = excluded.updated_at
+        `);
+        stmt.run(worldId, turn, nationId, JSON.stringify(actions), now, now);
+    }
+
+    /** All queued actions for a turn, grouped by nation (submission order). */
+    getQueuedActions(worldId: string, turn: number): Array<{ nationId: string; actions: TurnAction[] }> {
+        const stmt = this.db.prepare(
+            'SELECT nation_id, actions FROM turn_action_queue WHERE world_id = ? AND turn = ? ORDER BY created_at'
+        );
+        const rows = stmt.all(worldId, turn) as Array<{ nation_id: string; actions: string }>;
+        return rows.map(r => ({ nationId: r.nation_id, actions: JSON.parse(r.actions) as TurnAction[] }));
+    }
+
+    /** Clear the queue for a resolved turn. */
+    clearQueuedActions(worldId: string, turn: number): void {
+        this.db.prepare('DELETE FROM turn_action_queue WHERE world_id = ? AND turn = ?').run(worldId, turn);
     }
 
     private mapRowToTurnState(row: TurnStateRow): TurnState {

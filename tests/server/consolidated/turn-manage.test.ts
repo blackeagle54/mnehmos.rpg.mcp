@@ -8,6 +8,7 @@ import { getDb, closeDb } from '../../../src/storage/index.js';
 import { WorldRepository } from '../../../src/storage/repos/world.repo.js';
 import { NationRepository } from '../../../src/storage/repos/nation.repo.js';
 import { RegionRepository } from '../../../src/storage/repos/region.repo.js';
+import { DiplomacyRepository } from '../../../src/storage/repos/diplomacy.repo.js';
 import { randomUUID } from 'crypto';
 
 process.env.NODE_ENV = 'test';
@@ -262,10 +263,10 @@ describe('turn_manage consolidated tool', () => {
             expect(data.actionType).toBe('submit_actions');
             expect(data.nationName).toBe('Nation Alpha');
             expect(data.actionsSubmitted).toBe(2);
-            expect(data.processedActions.length).toBe(2);
+            expect(data.queuedActions.length).toBe(2); // queued, not applied (#67)
         });
 
-        it('should process alliance proposal', async () => {
+        it('should queue an alliance proposal (applied at resolution)', async () => {
             const result = await handleTurnManage({
                 action: 'submit_actions',
                 worldId: testWorldId,
@@ -277,7 +278,7 @@ describe('turn_manage consolidated tool', () => {
 
             const data = parseResult(result);
             expect(data.success).toBe(true);
-            expect(data.processedActions).toContain(`Alliance proposed to ${testNation2Id}`);
+            expect(data.queuedActions).toContain(`propose_alliance → ${testNation2Id}`);
         });
 
         it('should return error if not in planning phase', async () => {
@@ -316,6 +317,59 @@ describe('turn_manage consolidated tool', () => {
 
             const data = parseResult(result);
             expect(data.actionType).toBe('submit_actions');
+        });
+    });
+
+    // #67: submit_actions must QUEUE actions during planning; world mutations
+    // (claims, alliances) must only happen at turn resolution.
+    describe('action queueing (#67)', () => {
+        beforeEach(async () => {
+            await handleTurnManage({ action: 'init', worldId: testWorldId }, ctx);
+        });
+
+        it('does not apply a claim during planning, only at resolution', async () => {
+            const db = getDb(':memory:');
+            const diplomacyRepo = new DiplomacyRepository(db);
+
+            const submit = await handleTurnManage({
+                action: 'submit_actions',
+                worldId: testWorldId,
+                nationId: testNationId,
+                actions: [{ type: 'claim_region', regionId: testRegionId, justification: 'Strategic' }]
+            }, ctx);
+            expect(parseResult(submit).success).toBe(true);
+
+            // PLANNING: the claim must NOT exist yet — it was queued, not applied.
+            expect(diplomacyRepo.getClaimsByRegion(testRegionId).length).toBe(0);
+
+            // Both nations ready → turn resolves → queued actions apply.
+            await handleTurnManage({ action: 'mark_ready', worldId: testWorldId, nationId: testNationId }, ctx);
+            await handleTurnManage({ action: 'mark_ready', worldId: testWorldId, nationId: testNation2Id }, ctx);
+
+            const claims = diplomacyRepo.getClaimsByRegion(testRegionId);
+            expect(claims.length).toBe(1);
+            expect(claims[0].nationId).toBe(testNationId);
+        });
+
+        it('does not apply an alliance during planning, only at resolution', async () => {
+            const db = getDb(':memory:');
+            const diplomacyRepo = new DiplomacyRepository(db);
+
+            await handleTurnManage({
+                action: 'submit_actions',
+                worldId: testWorldId,
+                nationId: testNationId,
+                actions: [{ type: 'propose_alliance', toNationId: testNation2Id }]
+            }, ctx);
+
+            // PLANNING: no alliance yet.
+            expect(diplomacyRepo.getRelation(testNationId, testNation2Id)?.isAllied ?? false).toBe(false);
+
+            await handleTurnManage({ action: 'mark_ready', worldId: testWorldId, nationId: testNationId }, ctx);
+            await handleTurnManage({ action: 'mark_ready', worldId: testWorldId, nationId: testNation2Id }, ctx);
+
+            // RESOLUTION applied it.
+            expect(diplomacyRepo.getRelation(testNationId, testNation2Id)?.isAllied).toBe(true);
         });
     });
 
