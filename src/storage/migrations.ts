@@ -212,6 +212,18 @@ export function migrate(db: Database.Database) {
     FOREIGN KEY(world_id) REFERENCES worlds(id) ON DELETE CASCADE
   );
 
+  CREATE TABLE IF NOT EXISTS turn_action_queue(
+    world_id TEXT NOT NULL,
+    turn INTEGER NOT NULL,
+    nation_id TEXT NOT NULL,
+    actions TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(world_id, turn, nation_id),
+    FOREIGN KEY(world_id) REFERENCES worlds(id) ON DELETE CASCADE,
+    FOREIGN KEY(nation_id) REFERENCES nations(id) ON DELETE CASCADE
+  );
+
   CREATE TABLE IF NOT EXISTS nations(
     id TEXT PRIMARY KEY,
     world_id TEXT NOT NULL,

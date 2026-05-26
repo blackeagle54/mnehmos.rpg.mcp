@@ -8,6 +8,7 @@ import { getDb, closeDb } from '../../../src/storage/index.js';
 import { WorldRepository } from '../../../src/storage/repos/world.repo.js';
 import { NationRepository } from '../../../src/storage/repos/nation.repo.js';
 import { RegionRepository } from '../../../src/storage/repos/region.repo.js';
+import { DiplomacyRepository } from '../../../src/storage/repos/diplomacy.repo.js';
 import { randomUUID } from 'crypto';
 
 process.env.NODE_ENV = 'test';
@@ -262,10 +263,10 @@ describe('turn_manage consolidated tool', () => {
             expect(data.actionType).toBe('submit_actions');
             expect(data.nationName).toBe('Nation Alpha');
             expect(data.actionsSubmitted).toBe(2);
-            expect(data.processedActions.length).toBe(2);
+            expect(data.queuedActions.length).toBe(2); // queued, not applied (#67)
         });
 
-        it('should process alliance proposal', async () => {
+        it('should queue an alliance proposal (applied at resolution)', async () => {
             const result = await handleTurnManage({
                 action: 'submit_actions',
                 worldId: testWorldId,
@@ -277,7 +278,7 @@ describe('turn_manage consolidated tool', () => {
 
             const data = parseResult(result);
             expect(data.success).toBe(true);
-            expect(data.processedActions).toContain(`Alliance proposed to ${testNation2Id}`);
+            expect(data.queuedActions).toContain(`propose_alliance → ${testNation2Id}`);
         });
 
         it('should return error if not in planning phase', async () => {
@@ -316,6 +317,156 @@ describe('turn_manage consolidated tool', () => {
 
             const data = parseResult(result);
             expect(data.actionType).toBe('submit_actions');
+        });
+    });
+
+    // #67: submit_actions must QUEUE actions during planning; world mutations
+    // (claims, alliances) must only happen at turn resolution.
+    describe('action queueing (#67)', () => {
+        beforeEach(async () => {
+            await handleTurnManage({ action: 'init', worldId: testWorldId }, ctx);
+        });
+
+        it('does not apply a claim during planning, only at resolution', async () => {
+            const db = getDb(':memory:');
+            const diplomacyRepo = new DiplomacyRepository(db);
+
+            const submit = await handleTurnManage({
+                action: 'submit_actions',
+                worldId: testWorldId,
+                nationId: testNationId,
+                actions: [{ type: 'claim_region', regionId: testRegionId, justification: 'Strategic' }]
+            }, ctx);
+            expect(parseResult(submit).success).toBe(true);
+
+            // PLANNING: the claim must NOT exist yet — it was queued, not applied.
+            expect(diplomacyRepo.getClaimsByRegion(testRegionId).length).toBe(0);
+
+            // Both nations ready → turn resolves → queued actions apply.
+            await handleTurnManage({ action: 'mark_ready', worldId: testWorldId, nationId: testNationId }, ctx);
+            await handleTurnManage({ action: 'mark_ready', worldId: testWorldId, nationId: testNation2Id }, ctx);
+
+            const claims = diplomacyRepo.getClaimsByRegion(testRegionId);
+            expect(claims.length).toBe(1);
+            expect(claims[0].nationId).toBe(testNationId);
+        });
+
+        it('does not apply an alliance during planning, only at resolution', async () => {
+            const db = getDb(':memory:');
+            const diplomacyRepo = new DiplomacyRepository(db);
+
+            await handleTurnManage({
+                action: 'submit_actions',
+                worldId: testWorldId,
+                nationId: testNationId,
+                actions: [{ type: 'propose_alliance', toNationId: testNation2Id }]
+            }, ctx);
+
+            // PLANNING: no alliance yet.
+            expect(diplomacyRepo.getRelation(testNationId, testNation2Id)?.isAllied ?? false).toBe(false);
+
+            await handleTurnManage({ action: 'mark_ready', worldId: testWorldId, nationId: testNationId }, ctx);
+            await handleTurnManage({ action: 'mark_ready', worldId: testWorldId, nationId: testNation2Id }, ctx);
+
+            // RESOLUTION applied it.
+            expect(diplomacyRepo.getRelation(testNationId, testNation2Id)?.isAllied).toBe(true);
+        });
+
+        it('rejects submit_actions from a nation that already marked ready (#67 — CodeRabbit)', async () => {
+            // Alpha marks ready (Beta hasn't, so the turn stays in planning).
+            await handleTurnManage({ action: 'mark_ready', worldId: testWorldId, nationId: testNationId }, ctx);
+
+            // Alpha must not be able to submit or modify its locked-in actions now.
+            const result = await handleTurnManage({
+                action: 'submit_actions',
+                worldId: testWorldId,
+                nationId: testNationId,
+                actions: [{ type: 'claim_region', regionId: testRegionId }]
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.error).toBe(true);
+            expect(String(data.message)).toMatch(/already.*ready|cannot/i);
+        });
+
+        it('rejects an unsupported transfer_region action at submit time (#67 — CodeRabbit)', async () => {
+            const result = await handleTurnManage({
+                action: 'submit_actions',
+                worldId: testWorldId,
+                nationId: testNationId,
+                actions: [{ type: 'transfer_region', regionId: testRegionId, toNationId: testNation2Id }]
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.error).toBe(true);
+            expect(String(data.message)).toMatch(/transfer_region|not.*supported/i);
+        });
+
+        it('rejects a claim_region missing regionId at submit time (#67 — CodeRabbit)', async () => {
+            const result = await handleTurnManage({
+                action: 'submit_actions',
+                worldId: testWorldId,
+                nationId: testNationId,
+                actions: [{ type: 'claim_region' }] // no regionId
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.error).toBe(true);
+            expect(String(data.message)).toMatch(/regionId|invalid/i);
+        });
+
+        it('rejects a nation that belongs to a different world (isolation) (#67 — CodeRabbit)', async () => {
+            const db = getDb(':memory:');
+            const now = new Date().toISOString();
+            const otherWorldId = randomUUID();
+            new WorldRepository(db).create({
+                id: otherWorldId, name: 'Other World', seed: 'x', width: 10, height: 10,
+                tileData: '{}', createdAt: now, updatedAt: now
+            });
+            const foreignNationId = randomUUID();
+            new NationRepository(db).create({
+                id: foreignNationId, worldId: otherWorldId, name: 'Foreigner', leader: 'L',
+                ideology: 'democracy', aggression: 50, trust: 50, paranoia: 30, gdp: 1000,
+                resources: { food: 1, metal: 1, oil: 1 }, relations: {}, createdAt: now, updatedAt: now
+            });
+
+            const submit = await handleTurnManage({
+                action: 'submit_actions', worldId: testWorldId, nationId: foreignNationId, actions: []
+            }, ctx);
+            expect(parseResult(submit).error).toBe(true);
+            expect(String(parseResult(submit).message)).toMatch(/world/i);
+
+            const ready = await handleTurnManage({
+                action: 'mark_ready', worldId: testWorldId, nationId: foreignNationId
+            }, ctx);
+            expect(parseResult(ready).error).toBe(true);
+            expect(String(parseResult(ready).message)).toMatch(/world/i);
+        });
+
+        it('rejects a claim_region referencing a region from another world (#67 — CodeRabbit)', async () => {
+            const db = getDb(':memory:');
+            const now = new Date().toISOString();
+            const otherWorldId = randomUUID();
+            new WorldRepository(db).create({
+                id: otherWorldId, name: 'Elsewhere', seed: 'y', width: 10, height: 10,
+                tileData: '{}', createdAt: now, updatedAt: now
+            });
+            const foreignRegionId = randomUUID();
+            new RegionRepository(db).create({
+                id: foreignRegionId, worldId: otherWorldId, name: 'Far Land', type: 'plains',
+                centerX: 1, centerY: 1, color: '#fff', createdAt: now, updatedAt: now
+            });
+
+            const result = await handleTurnManage({
+                action: 'submit_actions',
+                worldId: testWorldId,
+                nationId: testNationId,
+                actions: [{ type: 'claim_region', regionId: foreignRegionId }]
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.error).toBe(true);
+            expect(String(data.message)).toMatch(/not in this world/i);
         });
     });
 

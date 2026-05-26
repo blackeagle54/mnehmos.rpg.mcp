@@ -42,6 +42,100 @@ function getRepos() {
     };
 }
 
+type DiplomaticAction = z.infer<typeof TurnActionSchema>;
+
+/** Human-readable summary of a queued action (no world mutation). (#67) */
+function describeQueuedAction(a: DiplomaticAction): string {
+    switch (a.type) {
+        case 'claim_region': return `claim_region: ${a.regionId ?? ''}`;
+        case 'propose_alliance': return `propose_alliance → ${a.toNationId ?? ''}`;
+        case 'break_alliance': return `break_alliance → ${a.toNationId ?? ''}`;
+        case 'declare_intent': return `declare_intent: ${a.intent ?? ''}`;
+        case 'send_message': return `send_message → ${a.toNationId ?? ''}`;
+        case 'adjust_relations': return `adjust_relations → ${a.toNationId ?? ''} (${a.opinionDelta ?? 0})`;
+        default: return a.type;
+    }
+}
+
+/**
+ * Validate that an action is something resolution can actually execute — a
+ * handled type with its required fields — so we reject it at submit time instead
+ * of queueing a silent no-op. Returns an error message, or null if OK. (#67)
+ */
+function validateActionExecutable(a: DiplomaticAction): string | null {
+    switch (a.type) {
+        case 'claim_region': return a.regionId ? null : 'claim_region requires regionId';
+        case 'propose_alliance': return a.toNationId ? null : 'propose_alliance requires toNationId';
+        case 'break_alliance': return a.toNationId ? null : 'break_alliance requires toNationId';
+        case 'adjust_relations':
+            return a.toNationId && a.opinionDelta !== undefined
+                ? null
+                : 'adjust_relations requires toNationId and opinionDelta';
+        case 'declare_intent': return a.intent ? null : 'declare_intent requires intent';
+        case 'send_message': return a.message && a.toNationId ? null : 'send_message requires message and toNationId';
+        case 'transfer_region': return 'transfer_region is not yet supported';
+        default: return `unsupported action type: ${(a as { type?: string }).type}`;
+    }
+}
+
+/**
+ * Apply one queued action's world mutation. Invoked only at turn resolution, so
+ * planning-phase submissions stay invisible until the turn advances. (#67)
+ */
+function applyTurnAction(action: DiplomaticAction, nationId: string, diplomacyRepo: DiplomacyRepository): void {
+    switch (action.type) {
+        case 'claim_region':
+            if (action.regionId) {
+                diplomacyRepo.createClaim({
+                    id: `claim-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+                    nationId,
+                    regionId: action.regionId,
+                    claimStrength: 100,
+                    justification: action.justification,
+                    createdAt: new Date().toISOString()
+                });
+            }
+            break;
+        case 'propose_alliance':
+            if (action.toNationId) {
+                const relation = diplomacyRepo.getRelation(nationId, action.toNationId);
+                if (!relation || relation.opinion >= 50) {
+                    diplomacyRepo.upsertRelation({
+                        fromNationId: nationId,
+                        toNationId: action.toNationId,
+                        opinion: relation?.opinion || 50,
+                        isAllied: true,
+                        truceUntil: undefined,
+                        updatedAt: new Date().toISOString()
+                    });
+                }
+            }
+            break;
+        case 'break_alliance':
+            if (action.toNationId) {
+                const relation = diplomacyRepo.getRelation(nationId, action.toNationId);
+                if (relation?.isAllied) {
+                    diplomacyRepo.upsertRelation({ ...relation, isAllied: false, updatedAt: new Date().toISOString() });
+                }
+            }
+            break;
+        case 'adjust_relations':
+            if (action.toNationId && action.opinionDelta !== undefined) {
+                const relation = diplomacyRepo.getRelation(nationId, action.toNationId);
+                diplomacyRepo.upsertRelation({
+                    fromNationId: nationId,
+                    toNationId: action.toNationId,
+                    opinion: (relation?.opinion || 50) + action.opinionDelta,
+                    isAllied: relation?.isAllied || false,
+                    truceUntil: relation?.truceUntil,
+                    updatedAt: new Date().toISOString()
+                });
+            }
+            break;
+        // declare_intent / send_message: narrative only — no world-state mutation.
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // ACTION SCHEMAS
 // ═══════════════════════════════════════════════════════════════════════════
@@ -149,7 +243,7 @@ async function handleGetStatus(args: z.infer<typeof GetStatusSchema>): Promise<o
 }
 
 async function handleSubmitActions(args: z.infer<typeof SubmitActionsSchema>): Promise<object> {
-    const { turnStateRepo, diplomacyRepo, nationRepo } = getRepos();
+    const { turnStateRepo, nationRepo, regionRepo } = getRepos();
 
     const turnState = turnStateRepo.findByWorldId(args.worldId);
     if (!turnState) {
@@ -176,85 +270,63 @@ async function handleSubmitActions(args: z.infer<typeof SubmitActionsSchema>): P
             message: 'Nation not found'
         };
     }
+    // World isolation: the nation must belong to this world, not merely exist. (#67 — CodeRabbit)
+    if (nation.worldId !== args.worldId) {
+        return {
+            error: true,
+            actionType: 'submit_actions',
+            message: 'Nation does not belong to this world'
+        };
+    }
 
-    const processedActions: string[] = [];
+    // A nation that already marked ready has locked in its turn — it must not be
+    // able to submit or alter its queued actions afterward. (#67 — CodeRabbit)
+    if (turnState.nationsReady.includes(args.nationId)) {
+        return {
+            error: true,
+            actionType: 'submit_actions',
+            message: `${nation.name} has already marked ready this turn; cannot submit or modify actions until the next turn.`
+        };
+    }
 
-    // Execute actions immediately
+    // Reject anything resolution can't execute (unsupported type or missing
+    // required fields) rather than queueing a silent no-op. (#67 — CodeRabbit)
     for (const action of args.actions) {
-        switch (action.type) {
-            case 'claim_region':
-                if (action.regionId) {
-                    diplomacyRepo.createClaim({
-                        id: `claim-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-                        nationId: args.nationId,
-                        regionId: action.regionId,
-                        claimStrength: 100,
-                        justification: action.justification,
-                        createdAt: new Date().toISOString()
-                    });
-                    processedActions.push(`Claimed region ${action.regionId}`);
-                }
-                break;
-
-            case 'propose_alliance':
-                if (action.toNationId) {
-                    const relation = diplomacyRepo.getRelation(args.nationId, action.toNationId);
-                    if (!relation || relation.opinion >= 50) {
-                        diplomacyRepo.upsertRelation({
-                            fromNationId: args.nationId,
-                            toNationId: action.toNationId,
-                            opinion: relation?.opinion || 50,
-                            isAllied: true,
-                            truceUntil: undefined,
-                            updatedAt: new Date().toISOString()
-                        });
-                        processedActions.push(`Alliance proposed to ${action.toNationId}`);
-                    }
-                }
-                break;
-
-            case 'break_alliance':
-                if (action.toNationId) {
-                    const relation = diplomacyRepo.getRelation(args.nationId, action.toNationId);
-                    if (relation?.isAllied) {
-                        diplomacyRepo.upsertRelation({
-                            ...relation,
-                            isAllied: false,
-                            updatedAt: new Date().toISOString()
-                        });
-                        processedActions.push(`Alliance broken with ${action.toNationId}`);
-                    }
-                }
-                break;
-
-            case 'declare_intent':
-                if (action.intent) {
-                    processedActions.push(`Intent declared: ${action.intent}`);
-                }
-                break;
-
-            case 'send_message':
-                if (action.message && action.toNationId) {
-                    processedActions.push(`Message sent to ${action.toNationId}`);
-                }
-                break;
-
-            case 'adjust_relations':
-                if (action.toNationId && action.opinionDelta !== undefined) {
-                    const relation = diplomacyRepo.getRelation(args.nationId, action.toNationId);
-                    diplomacyRepo.upsertRelation({
-                        fromNationId: args.nationId,
-                        toNationId: action.toNationId,
-                        opinion: (relation?.opinion || 50) + action.opinionDelta,
-                        isAllied: relation?.isAllied || false,
-                        truceUntil: relation?.truceUntil,
-                        updatedAt: new Date().toISOString()
-                    });
-                    processedActions.push(`Relations adjusted with ${action.toNationId}: ${action.opinionDelta > 0 ? '+' : ''}${action.opinionDelta}`);
-                }
-                break;
+        const problem = validateActionExecutable(action);
+        if (problem) {
+            return {
+                error: true,
+                actionType: 'submit_actions',
+                message: `Invalid action — ${problem}`
+            };
+        }
+        // Referenced entities must exist and belong to THIS world — not just be
+        // non-empty — so resolution-time writes can't fail or link across worlds. (#67 — CodeRabbit)
+        if (action.type === 'claim_region' && action.regionId) {
+            const region = regionRepo.findById(action.regionId);
+            if (!region || region.worldId !== args.worldId) {
+                return {
+                    error: true,
+                    actionType: 'submit_actions',
+                    message: `claim_region references region "${action.regionId}", which is not in this world`
+                };
+            }
+        }
+        if ((action.type === 'propose_alliance' || action.type === 'break_alliance' || action.type === 'adjust_relations') && action.toNationId) {
+            const target = nationRepo.findById(action.toNationId);
+            if (!target || target.worldId !== args.worldId) {
+                return {
+                    error: true,
+                    actionType: 'submit_actions',
+                    message: `${action.type} references nation "${action.toNationId}", which is not in this world`
+                };
+            }
         }
     }
+
+    // Record intent only — world mutations are applied at resolution (mark_ready,
+    // once all nations are ready), not during the planning phase. (#67)
+    turnStateRepo.queueActions(args.worldId, turnState.currentTurn, args.nationId, args.actions);
 
     return {
         success: true,
@@ -264,12 +336,13 @@ async function handleSubmitActions(args: z.infer<typeof SubmitActionsSchema>): P
         nationName: nation.name,
         turn: turnState.currentTurn,
         actionsSubmitted: args.actions.length,
-        processedActions: processedActions
+        queuedActions: args.actions.map(describeQueuedAction),
+        message: `Queued ${args.actions.length} action(s) for ${nation.name}; applied when the turn resolves.`
     };
 }
 
 async function handleMarkReady(args: z.infer<typeof MarkReadySchema>): Promise<object> {
-    const { turnStateRepo, nationRepo, diplomacyRepo, regionRepo } = getRepos();
+    const { turnStateRepo, nationRepo, diplomacyRepo, regionRepo, db } = getRepos();
 
     const turnState = turnStateRepo.findByWorldId(args.worldId);
     if (!turnState) {
@@ -296,26 +369,54 @@ async function handleMarkReady(args: z.infer<typeof MarkReadySchema>): Promise<o
             message: 'Nation not found'
         };
     }
+    // World isolation: the nation must belong to this world, not merely exist. (#67 — CodeRabbit)
+    if (nation.worldId !== args.worldId) {
+        return {
+            error: true,
+            actionType: 'mark_ready',
+            message: 'Nation does not belong to this world'
+        };
+    }
 
-    turnStateRepo.addReadyNation(args.worldId, args.nationId);
-    const updated = turnStateRepo.findByWorldId(args.worldId)!;
     const allNations = nationRepo.findByWorldId(args.worldId);
+    const currentTurn = turnState.currentTurn;
+    // Would this nation marking ready complete the set? Compute it BEFORE committing
+    // the ready flag, so resolution and the ready write can be one atomic unit.
+    const readyAfter = new Set(turnState.nationsReady);
+    readyAfter.add(args.nationId);
+    const willResolve = readyAfter.size === allNations.length && allNations.length > 0;
 
-    // Check if all ready -> trigger resolution
-    if (updated.nationsReady.length === allNations.length && allNations.length > 0) {
-        // Start resolution
-        turnStateRepo.updatePhase(args.worldId, 'resolution');
+    if (willResolve) {
+        // Resolve the turn atomically: record this nation ready, apply every
+        // nation's queued actions, clear the queue, run turn processing, and
+        // advance — all-or-nothing. Including the ready write means a resolution
+        // failure rolls it back too, so we never get stuck "all ready, still
+        // planning". (#67 — CodeRabbit) All steps are synchronous, so the
+        // synchronous better-sqlite3 transaction is safe.
+        db.transaction(() => {
+            turnStateRepo.addReadyNation(args.worldId, args.nationId);
+            turnStateRepo.updatePhase(args.worldId, 'resolution');
 
-        // Process turn
-        const conflictResolver = new ConflictResolver();
-        const turnProcessor = new TurnProcessor(nationRepo, regionRepo, diplomacyRepo, conflictResolver);
-        turnProcessor.processTurn(args.worldId, updated.currentTurn);
+            // Planning-phase submissions were only recorded; apply them now.
+            const queued = turnStateRepo.getQueuedActions(args.worldId, currentTurn);
+            for (const { nationId, actions } of queued) {
+                for (const action of actions) {
+                    applyTurnAction(action, nationId, diplomacyRepo);
+                }
+            }
+            turnStateRepo.clearQueuedActions(args.worldId, currentTurn);
 
-        // Move to finished then back to planning for next turn
-        turnStateRepo.updatePhase(args.worldId, 'finished');
-        turnStateRepo.incrementTurn(args.worldId);
-        turnStateRepo.clearReadyNations(args.worldId);
-        turnStateRepo.updatePhase(args.worldId, 'planning');
+            // Process turn (conflict resolution on the resulting world).
+            const conflictResolver = new ConflictResolver();
+            const turnProcessor = new TurnProcessor(nationRepo, regionRepo, diplomacyRepo, conflictResolver);
+            turnProcessor.processTurn(args.worldId, currentTurn);
+
+            // Advance to the next planning turn.
+            turnStateRepo.updatePhase(args.worldId, 'finished');
+            turnStateRepo.incrementTurn(args.worldId);
+            turnStateRepo.clearReadyNations(args.worldId);
+            turnStateRepo.updatePhase(args.worldId, 'planning');
+        })();
 
         return {
             success: true,
@@ -324,12 +425,15 @@ async function handleMarkReady(args: z.infer<typeof MarkReadySchema>): Promise<o
             nationId: args.nationId,
             nationName: nation.name,
             allReady: true,
-            turnResolved: updated.currentTurn,
-            nextTurn: updated.currentTurn + 1,
+            turnResolved: currentTurn,
+            nextTurn: currentTurn + 1,
             message: 'All nations ready! Turn resolved automatically.'
         };
     }
 
+    // Not all ready yet — just record this nation's readiness.
+    turnStateRepo.addReadyNation(args.worldId, args.nationId);
+    const updated = turnStateRepo.findByWorldId(args.worldId)!;
     const waitingFor = allNations
         .filter(n => !updated.nationsReady.includes(n.id))
         .map(n => ({ id: n.id, name: n.name }));
@@ -533,10 +637,10 @@ export async function handleTurnManage(args: unknown, _ctx: SessionContext): Pro
                     'Turn': parsed.turn,
                     'Actions': parsed.actionsSubmitted
                 });
-                if (parsed.processedActions?.length > 0) {
-                    output += '\n**Processed:**\n';
-                    parsed.processedActions.forEach((a: string) => {
-                        output += `  ✓ ${a}\n`;
+                if (parsed.queuedActions?.length > 0) {
+                    output += '\n**Queued (applied at resolution):**\n';
+                    parsed.queuedActions.forEach((a: string) => {
+                        output += `  • ${a}\n`;
                     });
                 }
                 break;
