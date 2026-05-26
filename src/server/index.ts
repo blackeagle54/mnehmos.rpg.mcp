@@ -10,12 +10,14 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 
 // Meta-tools and registry
 import { MetaTools, handleSearchTools, handleLoadToolSchema } from './meta-tools.js';
 import { buildConsolidatedRegistry } from './consolidated-registry.js';
 import { toolParamShape } from './tool-shape.js';
+import { buildAdvertisedTools } from './advertised-tools.js';
 // MINIMAL_SCHEMA removed - must pass actual schema for MCP SDK to pass arguments
 
 // PubSub and utilities
@@ -142,6 +144,19 @@ async function main() {
       )
     );
   }
+
+  // #73: Advertise fully-inlined tool schemas. The MCP SDK auto-registers a
+  // ListTools handler (on first server.tool call) that serializes schemas with
+  // zod-to-json-schema's default $refStrategy, emitting internal $refs for reused
+  // Zod instances (e.g. a status enum used at both `status` and `statusFilter`).
+  // Some MCP clients/bridges (OpenAI + Open WebUI via mcpo) can't resolve those.
+  // Registering on the low-level server overwrites the SDK's handler in place;
+  // CallTool dispatch/validation is unaffected (it still uses the Zod schemas
+  // registered via server.tool above). buildAdvertisedTools() is the single
+  // source covering ALL registered categories (meta + event + consolidated) so
+  // none silently drops out of discovery.
+  const advertisedTools = buildAdvertisedTools();
+  server.server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: advertisedTools }));
 
   console.error(`[Server] Registered ${toolCount} tools with minimal schemas`);
   console.error(`[Server] Meta-tools: search_tools, load_tool_schema`);
