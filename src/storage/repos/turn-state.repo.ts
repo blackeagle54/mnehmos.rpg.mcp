@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3';
-import { TurnState, TurnStateSchema, TurnAction } from '../../schema/turn-state.js';
+import { z } from 'zod';
+import { TurnState, TurnStateSchema, TurnAction, TurnActionSchema } from '../../schema/turn-state.js';
 
 interface TurnStateRow {
     world_id: string;
@@ -100,7 +101,12 @@ export class TurnStateRepository {
             'SELECT nation_id, actions FROM turn_action_queue WHERE world_id = ? AND turn = ? ORDER BY created_at'
         );
         const rows = stmt.all(worldId, turn) as Array<{ nation_id: string; actions: string }>;
-        return rows.map(r => ({ nationId: r.nation_id, actions: JSON.parse(r.actions) as TurnAction[] }));
+        // Validate persisted payloads instead of trusting a raw cast — a malformed
+        // queue row must fail loudly, not feed garbage into resolution.
+        return rows.map(r => ({
+            nationId: r.nation_id,
+            actions: z.array(TurnActionSchema).parse(JSON.parse(r.actions)) as TurnAction[],
+        }));
     }
 
     /** Clear the queue for a resolved turn. */

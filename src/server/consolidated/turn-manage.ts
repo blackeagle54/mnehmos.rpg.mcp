@@ -268,7 +268,7 @@ async function handleSubmitActions(args: z.infer<typeof SubmitActionsSchema>): P
 }
 
 async function handleMarkReady(args: z.infer<typeof MarkReadySchema>): Promise<object> {
-    const { turnStateRepo, nationRepo, diplomacyRepo, regionRepo } = getRepos();
+    const { turnStateRepo, nationRepo, diplomacyRepo, regionRepo, db } = getRepos();
 
     const turnState = turnStateRepo.findByWorldId(args.worldId);
     if (!turnState) {
@@ -302,29 +302,34 @@ async function handleMarkReady(args: z.infer<typeof MarkReadySchema>): Promise<o
 
     // Check if all ready -> trigger resolution
     if (updated.nationsReady.length === allNations.length && allNations.length > 0) {
-        // Start resolution
-        turnStateRepo.updatePhase(args.worldId, 'resolution');
+        // Resolve the turn atomically: apply every nation's queued actions, clear
+        // the queue, run turn processing, and advance — all-or-nothing so a
+        // mid-resolution failure can't leave partial mutations or a half-cleared
+        // queue. (#67 — CodeRabbit) better-sqlite3 transactions are synchronous, and
+        // every step here (repo writes + processTurn) is synchronous.
+        db.transaction(() => {
+            turnStateRepo.updatePhase(args.worldId, 'resolution');
 
-        // Apply every nation's queued actions now — planning-phase submissions were
-        // only recorded — then run turn processing on the resulting world. (#67)
-        const queued = turnStateRepo.getQueuedActions(args.worldId, updated.currentTurn);
-        for (const { nationId, actions } of queued) {
-            for (const action of actions) {
-                applyTurnAction(action, nationId, diplomacyRepo);
+            // Planning-phase submissions were only recorded; apply them now.
+            const queued = turnStateRepo.getQueuedActions(args.worldId, updated.currentTurn);
+            for (const { nationId, actions } of queued) {
+                for (const action of actions) {
+                    applyTurnAction(action, nationId, diplomacyRepo);
+                }
             }
-        }
-        turnStateRepo.clearQueuedActions(args.worldId, updated.currentTurn);
+            turnStateRepo.clearQueuedActions(args.worldId, updated.currentTurn);
 
-        // Process turn
-        const conflictResolver = new ConflictResolver();
-        const turnProcessor = new TurnProcessor(nationRepo, regionRepo, diplomacyRepo, conflictResolver);
-        turnProcessor.processTurn(args.worldId, updated.currentTurn);
+            // Process turn (conflict resolution on the resulting world).
+            const conflictResolver = new ConflictResolver();
+            const turnProcessor = new TurnProcessor(nationRepo, regionRepo, diplomacyRepo, conflictResolver);
+            turnProcessor.processTurn(args.worldId, updated.currentTurn);
 
-        // Move to finished then back to planning for next turn
-        turnStateRepo.updatePhase(args.worldId, 'finished');
-        turnStateRepo.incrementTurn(args.worldId);
-        turnStateRepo.clearReadyNations(args.worldId);
-        turnStateRepo.updatePhase(args.worldId, 'planning');
+            // Advance to the next planning turn.
+            turnStateRepo.updatePhase(args.worldId, 'finished');
+            turnStateRepo.incrementTurn(args.worldId);
+            turnStateRepo.clearReadyNations(args.worldId);
+            turnStateRepo.updatePhase(args.worldId, 'planning');
+        })();
 
         return {
             success: true,
