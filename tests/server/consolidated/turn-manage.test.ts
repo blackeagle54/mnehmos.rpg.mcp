@@ -371,6 +371,23 @@ describe('turn_manage consolidated tool', () => {
             // RESOLUTION applied it.
             expect(diplomacyRepo.getRelation(testNationId, testNation2Id)?.isAllied).toBe(true);
         });
+
+        it('rejects submit_actions from a nation that already marked ready (#67 — CodeRabbit)', async () => {
+            // Alpha marks ready (Beta hasn't, so the turn stays in planning).
+            await handleTurnManage({ action: 'mark_ready', worldId: testWorldId, nationId: testNationId }, ctx);
+
+            // Alpha must not be able to submit or modify its locked-in actions now.
+            const result = await handleTurnManage({
+                action: 'submit_actions',
+                worldId: testWorldId,
+                nationId: testNationId,
+                actions: [{ type: 'claim_region', regionId: testRegionId }]
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.error).toBe(true);
+            expect(String(data.message)).toMatch(/already.*ready|cannot/i);
+        });
     });
 
     describe('mark_ready action', () => {

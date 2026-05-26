@@ -250,6 +250,16 @@ async function handleSubmitActions(args: z.infer<typeof SubmitActionsSchema>): P
         };
     }
 
+    // A nation that already marked ready has locked in its turn — it must not be
+    // able to submit or alter its queued actions afterward. (#67 — CodeRabbit)
+    if (turnState.nationsReady.includes(args.nationId)) {
+        return {
+            error: true,
+            actionType: 'submit_actions',
+            message: `${nation.name} has already marked ready this turn; cannot submit or modify actions until the next turn.`
+        };
+    }
+
     // Record intent only — world mutations are applied at resolution (mark_ready,
     // once all nations are ready), not during the planning phase. (#67)
     turnStateRepo.queueActions(args.worldId, turnState.currentTurn, args.nationId, args.actions);
@@ -296,33 +306,38 @@ async function handleMarkReady(args: z.infer<typeof MarkReadySchema>): Promise<o
         };
     }
 
-    turnStateRepo.addReadyNation(args.worldId, args.nationId);
-    const updated = turnStateRepo.findByWorldId(args.worldId)!;
     const allNations = nationRepo.findByWorldId(args.worldId);
+    const currentTurn = turnState.currentTurn;
+    // Would this nation marking ready complete the set? Compute it BEFORE committing
+    // the ready flag, so resolution and the ready write can be one atomic unit.
+    const readyAfter = new Set(turnState.nationsReady);
+    readyAfter.add(args.nationId);
+    const willResolve = readyAfter.size === allNations.length && allNations.length > 0;
 
-    // Check if all ready -> trigger resolution
-    if (updated.nationsReady.length === allNations.length && allNations.length > 0) {
-        // Resolve the turn atomically: apply every nation's queued actions, clear
-        // the queue, run turn processing, and advance — all-or-nothing so a
-        // mid-resolution failure can't leave partial mutations or a half-cleared
-        // queue. (#67 — CodeRabbit) better-sqlite3 transactions are synchronous, and
-        // every step here (repo writes + processTurn) is synchronous.
+    if (willResolve) {
+        // Resolve the turn atomically: record this nation ready, apply every
+        // nation's queued actions, clear the queue, run turn processing, and
+        // advance — all-or-nothing. Including the ready write means a resolution
+        // failure rolls it back too, so we never get stuck "all ready, still
+        // planning". (#67 — CodeRabbit) All steps are synchronous, so the
+        // synchronous better-sqlite3 transaction is safe.
         db.transaction(() => {
+            turnStateRepo.addReadyNation(args.worldId, args.nationId);
             turnStateRepo.updatePhase(args.worldId, 'resolution');
 
             // Planning-phase submissions were only recorded; apply them now.
-            const queued = turnStateRepo.getQueuedActions(args.worldId, updated.currentTurn);
+            const queued = turnStateRepo.getQueuedActions(args.worldId, currentTurn);
             for (const { nationId, actions } of queued) {
                 for (const action of actions) {
                     applyTurnAction(action, nationId, diplomacyRepo);
                 }
             }
-            turnStateRepo.clearQueuedActions(args.worldId, updated.currentTurn);
+            turnStateRepo.clearQueuedActions(args.worldId, currentTurn);
 
             // Process turn (conflict resolution on the resulting world).
             const conflictResolver = new ConflictResolver();
             const turnProcessor = new TurnProcessor(nationRepo, regionRepo, diplomacyRepo, conflictResolver);
-            turnProcessor.processTurn(args.worldId, updated.currentTurn);
+            turnProcessor.processTurn(args.worldId, currentTurn);
 
             // Advance to the next planning turn.
             turnStateRepo.updatePhase(args.worldId, 'finished');
@@ -338,12 +353,15 @@ async function handleMarkReady(args: z.infer<typeof MarkReadySchema>): Promise<o
             nationId: args.nationId,
             nationName: nation.name,
             allReady: true,
-            turnResolved: updated.currentTurn,
-            nextTurn: updated.currentTurn + 1,
+            turnResolved: currentTurn,
+            nextTurn: currentTurn + 1,
             message: 'All nations ready! Turn resolved automatically.'
         };
     }
 
+    // Not all ready yet — just record this nation's readiness.
+    turnStateRepo.addReadyNation(args.worldId, args.nationId);
+    const updated = turnStateRepo.findByWorldId(args.worldId)!;
     const waitingFor = allNations
         .filter(n => !updated.nationsReady.includes(n.id))
         .map(n => ({ id: n.id, name: n.name }));
@@ -547,10 +565,10 @@ export async function handleTurnManage(args: unknown, _ctx: SessionContext): Pro
                     'Turn': parsed.turn,
                     'Actions': parsed.actionsSubmitted
                 });
-                if (parsed.processedActions?.length > 0) {
-                    output += '\n**Processed:**\n';
-                    parsed.processedActions.forEach((a: string) => {
-                        output += `  ✓ ${a}\n`;
+                if (parsed.queuedActions?.length > 0) {
+                    output += '\n**Queued (applied at resolution):**\n';
+                    parsed.queuedActions.forEach((a: string) => {
+                        output += `  • ${a}\n`;
                     });
                 }
                 break;

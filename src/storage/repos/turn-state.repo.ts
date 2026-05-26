@@ -85,6 +85,8 @@ export class TurnStateRepository {
 
     /** Replace a nation's queued actions for the given turn. */
     queueActions(worldId: string, turn: number, nationId: string, actions: TurnAction[]): void {
+        // Validate at write time so the queue never persists malformed actions.
+        const validated = z.array(TurnActionSchema).parse(actions);
         const now = new Date().toISOString();
         const stmt = this.db.prepare(`
             INSERT INTO turn_action_queue (world_id, turn, nation_id, actions, created_at, updated_at)
@@ -92,7 +94,7 @@ export class TurnStateRepository {
             ON CONFLICT(world_id, turn, nation_id) DO UPDATE SET
                 actions = excluded.actions, updated_at = excluded.updated_at
         `);
-        stmt.run(worldId, turn, nationId, JSON.stringify(actions), now, now);
+        stmt.run(worldId, turn, nationId, JSON.stringify(validated), now, now);
     }
 
     /** All queued actions for a turn, grouped by nation (submission order). */
