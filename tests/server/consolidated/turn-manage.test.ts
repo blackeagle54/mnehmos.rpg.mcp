@@ -354,6 +354,12 @@ describe('turn_manage consolidated tool', () => {
         it('does not apply an alliance during planning, only at resolution', async () => {
             const db = getDb(':memory:');
             const diplomacyRepo = new DiplomacyRepository(db);
+            // Seed opinion above Beta's paranoia-adjusted acceptance threshold (50 + 60/2 = 80)
+            // so the proposal is actually accepted once it routes through DiplomacyEngine (#63).
+            diplomacyRepo.upsertRelation({
+                fromNationId: testNationId, toNationId: testNation2Id,
+                opinion: 85, isAllied: false, updatedAt: new Date().toISOString()
+            });
 
             await handleTurnManage({
                 action: 'submit_actions',
@@ -362,7 +368,7 @@ describe('turn_manage consolidated tool', () => {
                 actions: [{ type: 'propose_alliance', toNationId: testNation2Id }]
             }, ctx);
 
-            // PLANNING: no alliance yet.
+            // PLANNING: no alliance yet (the seeded relation is not allied).
             expect(diplomacyRepo.getRelation(testNationId, testNation2Id)?.isAllied ?? false).toBe(false);
 
             await handleTurnManage({ action: 'mark_ready', worldId: testWorldId, nationId: testNationId }, ctx);
@@ -467,6 +473,105 @@ describe('turn_manage consolidated tool', () => {
             const data = parseResult(result);
             expect(data.error).toBe(true);
             expect(String(data.message)).toMatch(/not in this world/i);
+        });
+    });
+
+    // #63: turn resolution must route diplomacy mutations through DiplomacyEngine so
+    // the turn path and the standalone strategy path share ONE rule set — symmetric
+    // alliance/break state, the paranoia-adjusted acceptance threshold, and bounded
+    // opinion updates — instead of turn_manage re-implementing (and drifting from) them.
+    describe('diplomacy routes through DiplomacyEngine (#63)', () => {
+        beforeEach(async () => {
+            await handleTurnManage({ action: 'init', worldId: testWorldId }, ctx);
+        });
+
+        // Resolve the turn: Alpha (with queued actions) + Beta (passive) both ready.
+        async function resolveTurn() {
+            await handleTurnManage({ action: 'mark_ready', worldId: testWorldId, nationId: testNationId }, ctx);
+            return handleTurnManage({ action: 'mark_ready', worldId: testWorldId, nationId: testNation2Id }, ctx);
+        }
+
+        it('forms a SYMMETRIC alliance when opinion clears the paranoia threshold', async () => {
+            const db = getDb(':memory:');
+            const diplomacyRepo = new DiplomacyRepository(db);
+            // Beta's paranoia is 60 → engine threshold = 50 + 60/2 = 80. Seed 85 so it clears.
+            diplomacyRepo.upsertRelation({
+                fromNationId: testNationId, toNationId: testNation2Id,
+                opinion: 85, isAllied: false, updatedAt: new Date().toISOString()
+            });
+
+            await handleTurnManage({
+                action: 'submit_actions', worldId: testWorldId, nationId: testNationId,
+                actions: [{ type: 'propose_alliance', toNationId: testNation2Id }]
+            }, ctx);
+            await resolveTurn();
+
+            // Engine establishes BOTH directions (the inline path wrote only one).
+            expect(diplomacyRepo.getRelation(testNationId, testNation2Id)?.isAllied).toBe(true);
+            expect(diplomacyRepo.getRelation(testNation2Id, testNationId)?.isAllied).toBe(true);
+            // Engine sets opinion to 75 on both sides on establishment.
+            expect(diplomacyRepo.getRelation(testNationId, testNation2Id)?.opinion).toBe(75);
+            expect(diplomacyRepo.getRelation(testNation2Id, testNationId)?.opinion).toBe(75);
+        });
+
+        it('REFUSES an alliance when opinion is below the paranoia-adjusted threshold', async () => {
+            const db = getDb(':memory:');
+            const diplomacyRepo = new DiplomacyRepository(db);
+            // opinion 50 passes the old flat ">=50" rule but is below Beta's 80 threshold.
+            diplomacyRepo.upsertRelation({
+                fromNationId: testNationId, toNationId: testNation2Id,
+                opinion: 50, isAllied: false, updatedAt: new Date().toISOString()
+            });
+
+            await handleTurnManage({
+                action: 'submit_actions', worldId: testWorldId, nationId: testNationId,
+                actions: [{ type: 'propose_alliance', toNationId: testNation2Id }]
+            }, ctx);
+            await resolveTurn();
+
+            expect(diplomacyRepo.getRelation(testNationId, testNation2Id)?.isAllied ?? false).toBe(false);
+            expect(diplomacyRepo.getRelation(testNation2Id, testNationId)?.isAllied ?? false).toBe(false);
+        });
+
+        it('BREAKS an alliance symmetrically with opinion penalties', async () => {
+            const db = getDb(':memory:');
+            const diplomacyRepo = new DiplomacyRepository(db);
+            const now = new Date().toISOString();
+            // Pre-existing two-way alliance.
+            diplomacyRepo.upsertRelation({ fromNationId: testNationId, toNationId: testNation2Id, opinion: 75, isAllied: true, updatedAt: now });
+            diplomacyRepo.upsertRelation({ fromNationId: testNation2Id, toNationId: testNationId, opinion: 75, isAllied: true, updatedAt: now });
+
+            await handleTurnManage({
+                action: 'submit_actions', worldId: testWorldId, nationId: testNationId,
+                actions: [{ type: 'break_alliance', toNationId: testNation2Id }]
+            }, ctx);
+            await resolveTurn();
+
+            const ab = diplomacyRepo.getRelation(testNationId, testNation2Id);
+            const ba = diplomacyRepo.getRelation(testNation2Id, testNationId);
+            expect(ab?.isAllied).toBe(false);
+            expect(ba?.isAllied).toBe(false);   // inline path left the reciprocal relation allied
+            expect(ab?.opinion).toBe(-20);      // initiator penalty
+            expect(ba?.opinion).toBe(-50);      // they resent you more
+        });
+
+        it('CLAMPS adjust_relations to the opinion bound instead of overflowing', async () => {
+            const db = getDb(':memory:');
+            const diplomacyRepo = new DiplomacyRepository(db);
+            diplomacyRepo.upsertRelation({
+                fromNationId: testNationId, toNationId: testNation2Id,
+                opinion: 90, isAllied: false, updatedAt: new Date().toISOString()
+            });
+
+            await handleTurnManage({
+                action: 'submit_actions', worldId: testWorldId, nationId: testNationId,
+                actions: [{ type: 'adjust_relations', toNationId: testNation2Id, opinionDelta: 50 }]
+            }, ctx);
+            await resolveTurn();
+
+            // 90 + 50 = 140 exceeds the [-100,100] bound: the inline path throws on the
+            // schema parse and rolls the turn back (opinion stays 90); the engine clamps to 100.
+            expect(diplomacyRepo.getRelation(testNationId, testNation2Id)?.opinion).toBe(100);
         });
     });
 

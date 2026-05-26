@@ -15,6 +15,7 @@ import { DiplomacyRepository } from '../../storage/repos/diplomacy.repo.js';
 import { RegionRepository } from '../../storage/repos/region.repo.js';
 import { TurnProcessor } from '../../engine/strategy/turn-processor.js';
 import { ConflictResolver } from '../../engine/strategy/conflict-resolver.js';
+import { DiplomacyEngine } from '../../engine/strategy/diplomacy-engine.js';
 import { TurnActionSchema } from '../../schema/turn-state.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -81,10 +82,22 @@ function validateActionExecutable(a: DiplomaticAction): string | null {
 /**
  * Apply one queued action's world mutation. Invoked only at turn resolution, so
  * planning-phase submissions stay invisible until the turn advances. (#67)
+ *
+ * Diplomacy mutations delegate to DiplomacyEngine rather than writing relations
+ * inline, so the turn-resolution path shares ONE rule set with the standalone
+ * strategy path: the paranoia-adjusted alliance-acceptance threshold, symmetric
+ * alliance/break state in both directions, and bounded ([-100,100]) opinion
+ * updates. Re-implementing these here let the two paths drift. (#63)
  */
-function applyTurnAction(action: DiplomaticAction, nationId: string, diplomacyRepo: DiplomacyRepository): void {
+function applyTurnAction(
+    action: DiplomaticAction,
+    nationId: string,
+    diplomacyRepo: DiplomacyRepository,
+    diplomacyEngine: DiplomacyEngine
+): void {
     switch (action.type) {
         case 'claim_region':
+            // Territorial claims aren't the diplomacy engine's concern — write directly.
             if (action.regionId) {
                 diplomacyRepo.createClaim({
                     id: `claim-${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -97,39 +110,18 @@ function applyTurnAction(action: DiplomaticAction, nationId: string, diplomacyRe
             }
             break;
         case 'propose_alliance':
-            if (action.toNationId) {
-                const relation = diplomacyRepo.getRelation(nationId, action.toNationId);
-                if (!relation || relation.opinion >= 50) {
-                    diplomacyRepo.upsertRelation({
-                        fromNationId: nationId,
-                        toNationId: action.toNationId,
-                        opinion: relation?.opinion || 50,
-                        isAllied: true,
-                        truceUntil: undefined,
-                        updatedAt: new Date().toISOString()
-                    });
-                }
-            }
+            // Engine enforces the paranoia-adjusted acceptance rule and, on success,
+            // establishes the alliance symmetrically in both directions.
+            if (action.toNationId) diplomacyEngine.proposeAlliance(nationId, action.toNationId);
             break;
         case 'break_alliance':
-            if (action.toNationId) {
-                const relation = diplomacyRepo.getRelation(nationId, action.toNationId);
-                if (relation?.isAllied) {
-                    diplomacyRepo.upsertRelation({ ...relation, isAllied: false, updatedAt: new Date().toISOString() });
-                }
-            }
+            // Engine clears both directions and applies the break-up opinion penalties.
+            if (action.toNationId) diplomacyEngine.breakAlliance(nationId, action.toNationId);
             break;
         case 'adjust_relations':
+            // Engine clamps the result into the [-100, 100] opinion bound.
             if (action.toNationId && action.opinionDelta !== undefined) {
-                const relation = diplomacyRepo.getRelation(nationId, action.toNationId);
-                diplomacyRepo.upsertRelation({
-                    fromNationId: nationId,
-                    toNationId: action.toNationId,
-                    opinion: (relation?.opinion || 50) + action.opinionDelta,
-                    isAllied: relation?.isAllied || false,
-                    truceUntil: relation?.truceUntil,
-                    updatedAt: new Date().toISOString()
-                });
+                diplomacyEngine.adjustOpinion(nationId, action.toNationId, action.opinionDelta);
             }
             break;
         // declare_intent / send_message: narrative only — no world-state mutation.
@@ -397,11 +389,13 @@ async function handleMarkReady(args: z.infer<typeof MarkReadySchema>): Promise<o
             turnStateRepo.addReadyNation(args.worldId, args.nationId);
             turnStateRepo.updatePhase(args.worldId, 'resolution');
 
-            // Planning-phase submissions were only recorded; apply them now.
+            // Planning-phase submissions were only recorded; apply them now, routing
+            // diplomacy through the shared engine (#63).
+            const diplomacyEngine = new DiplomacyEngine(diplomacyRepo, nationRepo);
             const queued = turnStateRepo.getQueuedActions(args.worldId, currentTurn);
             for (const { nationId, actions } of queued) {
                 for (const action of actions) {
-                    applyTurnAction(action, nationId, diplomacyRepo);
+                    applyTurnAction(action, nationId, diplomacyRepo, diplomacyEngine);
                 }
             }
             turnStateRepo.clearQueuedActions(args.worldId, currentTurn);
