@@ -510,6 +510,7 @@ describe('turn_manage consolidated tool', () => {
             expect(diplomacyRepo.getRelation(testNationId, testNation2Id)?.isAllied).toBe(true);
             expect(diplomacyRepo.getRelation(testNation2Id, testNationId)?.isAllied).toBe(true);
             // Engine sets opinion to 75 on both sides on establishment.
+            expect(diplomacyRepo.getRelation(testNationId, testNation2Id)?.opinion).toBe(75);
             expect(diplomacyRepo.getRelation(testNation2Id, testNationId)?.opinion).toBe(75);
         });
 
