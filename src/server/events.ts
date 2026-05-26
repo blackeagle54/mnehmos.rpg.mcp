@@ -10,6 +10,11 @@ export const EventTools = {
         inputSchema: z.object({
             topics: z.array(z.enum(['world', 'combat'])).min(1)
         })
+    },
+    UNSUBSCRIBE: {
+        name: 'unsubscribe_from_events',
+        description: 'Unsubscribe from all event topics',
+        inputSchema: z.object({})
     }
 } as const;
 
@@ -56,12 +61,11 @@ export function registerEventTools(server: McpServer, pubsub: PubSub) {
     );
 
     // Add unsubscribe tool
-    const unsubscribeSchema = z.object({});
     server.tool(
-        'unsubscribe_from_events',
-        'Unsubscribe from all event topics',
-        unsubscribeSchema.extend({ sessionId: z.string().optional() }).shape,
-        withSession(unsubscribeSchema, async (_args, ctx) => {
+        EventTools.UNSUBSCRIBE.name,
+        EventTools.UNSUBSCRIBE.description,
+        EventTools.UNSUBSCRIBE.inputSchema.extend({ sessionId: z.string().optional() }).shape,
+        withSession(EventTools.UNSUBSCRIBE.inputSchema, async (_args, ctx) => {
             const { sessionId } = ctx;
             const subs = activeSubscriptions.get(sessionId) || [];
             subs.forEach(unsub => unsub());
