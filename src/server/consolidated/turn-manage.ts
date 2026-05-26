@@ -243,7 +243,7 @@ async function handleGetStatus(args: z.infer<typeof GetStatusSchema>): Promise<o
 }
 
 async function handleSubmitActions(args: z.infer<typeof SubmitActionsSchema>): Promise<object> {
-    const { turnStateRepo, nationRepo } = getRepos();
+    const { turnStateRepo, nationRepo, regionRepo } = getRepos();
 
     const turnState = turnStateRepo.findByWorldId(args.worldId);
     if (!turnState) {
@@ -299,6 +299,28 @@ async function handleSubmitActions(args: z.infer<typeof SubmitActionsSchema>): P
                 actionType: 'submit_actions',
                 message: `Invalid action — ${problem}`
             };
+        }
+        // Referenced entities must exist and belong to THIS world — not just be
+        // non-empty — so resolution-time writes can't fail or link across worlds. (#67 — CodeRabbit)
+        if (action.type === 'claim_region' && action.regionId) {
+            const region = regionRepo.findById(action.regionId);
+            if (!region || region.worldId !== args.worldId) {
+                return {
+                    error: true,
+                    actionType: 'submit_actions',
+                    message: `claim_region references region "${action.regionId}", which is not in this world`
+                };
+            }
+        }
+        if ((action.type === 'propose_alliance' || action.type === 'break_alliance' || action.type === 'adjust_relations') && action.toNationId) {
+            const target = nationRepo.findById(action.toNationId);
+            if (!target || target.worldId !== args.worldId) {
+                return {
+                    error: true,
+                    actionType: 'submit_actions',
+                    message: `${action.type} references nation "${action.toNationId}", which is not in this world`
+                };
+            }
         }
     }
 

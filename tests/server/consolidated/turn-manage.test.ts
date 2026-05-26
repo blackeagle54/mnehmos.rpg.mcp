@@ -442,6 +442,32 @@ describe('turn_manage consolidated tool', () => {
             expect(parseResult(ready).error).toBe(true);
             expect(String(parseResult(ready).message)).toMatch(/world/i);
         });
+
+        it('rejects a claim_region referencing a region from another world (#67 — CodeRabbit)', async () => {
+            const db = getDb(':memory:');
+            const now = new Date().toISOString();
+            const otherWorldId = randomUUID();
+            new WorldRepository(db).create({
+                id: otherWorldId, name: 'Elsewhere', seed: 'y', width: 10, height: 10,
+                tileData: '{}', createdAt: now, updatedAt: now
+            });
+            const foreignRegionId = randomUUID();
+            new RegionRepository(db).create({
+                id: foreignRegionId, worldId: otherWorldId, name: 'Far Land', type: 'plains',
+                centerX: 1, centerY: 1, color: '#fff', createdAt: now, updatedAt: now
+            });
+
+            const result = await handleTurnManage({
+                action: 'submit_actions',
+                worldId: testWorldId,
+                nationId: testNationId,
+                actions: [{ type: 'claim_region', regionId: foreignRegionId }]
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.error).toBe(true);
+            expect(String(data.message)).toMatch(/not in this world/i);
+        });
     });
 
     describe('mark_ready action', () => {
