@@ -220,7 +220,8 @@ export function migrate(db: Database.Database) {
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     PRIMARY KEY(world_id, turn, nation_id),
-    FOREIGN KEY(world_id) REFERENCES worlds(id) ON DELETE CASCADE
+    FOREIGN KEY(world_id) REFERENCES worlds(id) ON DELETE CASCADE,
+    FOREIGN KEY(nation_id) REFERENCES nations(id) ON DELETE CASCADE
   );
 
   CREATE TABLE IF NOT EXISTS nations(

@@ -58,6 +58,27 @@ function describeQueuedAction(a: DiplomaticAction): string {
 }
 
 /**
+ * Validate that an action is something resolution can actually execute — a
+ * handled type with its required fields — so we reject it at submit time instead
+ * of queueing a silent no-op. Returns an error message, or null if OK. (#67)
+ */
+function validateActionExecutable(a: DiplomaticAction): string | null {
+    switch (a.type) {
+        case 'claim_region': return a.regionId ? null : 'claim_region requires regionId';
+        case 'propose_alliance': return a.toNationId ? null : 'propose_alliance requires toNationId';
+        case 'break_alliance': return a.toNationId ? null : 'break_alliance requires toNationId';
+        case 'adjust_relations':
+            return a.toNationId && a.opinionDelta !== undefined
+                ? null
+                : 'adjust_relations requires toNationId and opinionDelta';
+        case 'declare_intent': return a.intent ? null : 'declare_intent requires intent';
+        case 'send_message': return a.message && a.toNationId ? null : 'send_message requires message and toNationId';
+        case 'transfer_region': return 'transfer_region is not yet supported';
+        default: return `unsupported action type: ${(a as { type?: string }).type}`;
+    }
+}
+
+/**
  * Apply one queued action's world mutation. Invoked only at turn resolution, so
  * planning-phase submissions stay invisible until the turn advances. (#67)
  */
@@ -258,6 +279,19 @@ async function handleSubmitActions(args: z.infer<typeof SubmitActionsSchema>): P
             actionType: 'submit_actions',
             message: `${nation.name} has already marked ready this turn; cannot submit or modify actions until the next turn.`
         };
+    }
+
+    // Reject anything resolution can't execute (unsupported type or missing
+    // required fields) rather than queueing a silent no-op. (#67 — CodeRabbit)
+    for (const action of args.actions) {
+        const problem = validateActionExecutable(action);
+        if (problem) {
+            return {
+                error: true,
+                actionType: 'submit_actions',
+                message: `Invalid action — ${problem}`
+            };
+        }
     }
 
     // Record intent only — world mutations are applied at resolution (mark_ready,

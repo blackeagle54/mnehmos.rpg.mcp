@@ -388,6 +388,32 @@ describe('turn_manage consolidated tool', () => {
             expect(data.error).toBe(true);
             expect(String(data.message)).toMatch(/already.*ready|cannot/i);
         });
+
+        it('rejects an unsupported transfer_region action at submit time (#67 — CodeRabbit)', async () => {
+            const result = await handleTurnManage({
+                action: 'submit_actions',
+                worldId: testWorldId,
+                nationId: testNationId,
+                actions: [{ type: 'transfer_region', regionId: testRegionId, toNationId: testNation2Id }]
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.error).toBe(true);
+            expect(String(data.message)).toMatch(/transfer_region|not.*supported/i);
+        });
+
+        it('rejects a claim_region missing regionId at submit time (#67 — CodeRabbit)', async () => {
+            const result = await handleTurnManage({
+                action: 'submit_actions',
+                worldId: testWorldId,
+                nationId: testNationId,
+                actions: [{ type: 'claim_region' }] // no regionId
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.error).toBe(true);
+            expect(String(data.message)).toMatch(/regionId|invalid/i);
+        });
     });
 
     describe('mark_ready action', () => {
