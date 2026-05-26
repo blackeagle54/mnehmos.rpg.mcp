@@ -10,12 +10,14 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 
 // Meta-tools and registry
 import { MetaTools, handleSearchTools, handleLoadToolSchema } from './meta-tools.js';
 import { buildConsolidatedRegistry } from './consolidated-registry.js';
 import { toolParamShape } from './tool-shape.js';
+import { toInlinedJsonSchema } from './tool-json-schema.js';
 // MINIMAL_SCHEMA removed - must pass actual schema for MCP SDK to pass arguments
 
 // PubSub and utilities
@@ -95,19 +97,41 @@ async function main() {
   // META-TOOLS: Register with FULL schemas (they're the discovery mechanism)
   // =========================================================================
   
+  // Accumulate the tools/list payload as we register each tool, built from the
+  // SAME shapes handed to the SDK but serialized with internal $refs INLINED (#73).
+  // A ListTools override below advertises this in place of the SDK's default
+  // (which emits $refs that some MCP bridges, e.g. mcpo, can't resolve).
+  const advertisedTools: Array<{
+    name: string;
+    description: string;
+    inputSchema: ReturnType<typeof toInlinedJsonSchema>;
+  }> = [];
+
+  const searchToolsShape = MetaTools.SEARCH_TOOLS.inputSchema.extend({ sessionId: z.string().optional() }).shape;
   server.tool(
     MetaTools.SEARCH_TOOLS.name,
     MetaTools.SEARCH_TOOLS.description,
-    MetaTools.SEARCH_TOOLS.inputSchema.extend({ sessionId: z.string().optional() }).shape,
+    searchToolsShape,
     auditLogger.wrapHandler(MetaTools.SEARCH_TOOLS.name, withSession(MetaTools.SEARCH_TOOLS.inputSchema, handleSearchTools))
   );
+  advertisedTools.push({
+    name: MetaTools.SEARCH_TOOLS.name,
+    description: MetaTools.SEARCH_TOOLS.description,
+    inputSchema: toInlinedJsonSchema(searchToolsShape),
+  });
 
+  const loadToolSchemaShape = MetaTools.LOAD_TOOL_SCHEMA.inputSchema.extend({ sessionId: z.string().optional() }).shape;
   server.tool(
     MetaTools.LOAD_TOOL_SCHEMA.name,
     MetaTools.LOAD_TOOL_SCHEMA.description,
-    MetaTools.LOAD_TOOL_SCHEMA.inputSchema.extend({ sessionId: z.string().optional() }).shape,
+    loadToolSchemaShape,
     auditLogger.wrapHandler(MetaTools.LOAD_TOOL_SCHEMA.name, withSession(MetaTools.LOAD_TOOL_SCHEMA.inputSchema, handleLoadToolSchema))
   );
+  advertisedTools.push({
+    name: MetaTools.LOAD_TOOL_SCHEMA.name,
+    description: MetaTools.LOAD_TOOL_SCHEMA.description,
+    inputSchema: toInlinedJsonSchema(loadToolSchemaShape),
+  });
 
   // =========================================================================
   // CONSOLIDATED TOOLS: 28 action-based tools (85% reduction from 195)
@@ -141,7 +165,22 @@ async function main() {
         withSession(entry.schema, entry.handler as any)
       )
     );
+    advertisedTools.push({
+      name: toolName,
+      description: entry.metadata.description,
+      inputSchema: toInlinedJsonSchema(shape),
+    });
   }
+
+  // #73: Advertise fully-inlined tool schemas. The MCP SDK auto-registers a
+  // ListTools handler (on first server.tool call) that serializes schemas with
+  // zod-to-json-schema's default $refStrategy, emitting internal $refs for reused
+  // Zod instances (e.g. a status enum used at both `status` and `statusFilter`).
+  // Some MCP clients/bridges (OpenAI + Open WebUI via mcpo) can't resolve those.
+  // Registering on the low-level server overwrites the SDK's handler in place;
+  // CallTool dispatch/validation is unaffected (it still uses the Zod schemas
+  // registered via server.tool above).
+  server.server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: advertisedTools }));
 
   console.error(`[Server] Registered ${toolCount} tools with minimal schemas`);
   console.error(`[Server] Meta-tools: search_tools, load_tool_schema`);
