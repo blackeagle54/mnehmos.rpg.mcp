@@ -414,6 +414,34 @@ describe('turn_manage consolidated tool', () => {
             expect(data.error).toBe(true);
             expect(String(data.message)).toMatch(/regionId|invalid/i);
         });
+
+        it('rejects a nation that belongs to a different world (isolation) (#67 — CodeRabbit)', async () => {
+            const db = getDb(':memory:');
+            const now = new Date().toISOString();
+            const otherWorldId = randomUUID();
+            new WorldRepository(db).create({
+                id: otherWorldId, name: 'Other World', seed: 'x', width: 10, height: 10,
+                tileData: '{}', createdAt: now, updatedAt: now
+            });
+            const foreignNationId = randomUUID();
+            new NationRepository(db).create({
+                id: foreignNationId, worldId: otherWorldId, name: 'Foreigner', leader: 'L',
+                ideology: 'democracy', aggression: 50, trust: 50, paranoia: 30, gdp: 1000,
+                resources: { food: 1, metal: 1, oil: 1 }, relations: {}, createdAt: now, updatedAt: now
+            });
+
+            const submit = await handleTurnManage({
+                action: 'submit_actions', worldId: testWorldId, nationId: foreignNationId, actions: []
+            }, ctx);
+            expect(parseResult(submit).error).toBe(true);
+            expect(String(parseResult(submit).message)).toMatch(/world/i);
+
+            const ready = await handleTurnManage({
+                action: 'mark_ready', worldId: testWorldId, nationId: foreignNationId
+            }, ctx);
+            expect(parseResult(ready).error).toBe(true);
+            expect(String(parseResult(ready).message)).toMatch(/world/i);
+        });
     });
 
     describe('mark_ready action', () => {

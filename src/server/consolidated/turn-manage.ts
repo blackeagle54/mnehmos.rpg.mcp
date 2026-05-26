@@ -270,6 +270,14 @@ async function handleSubmitActions(args: z.infer<typeof SubmitActionsSchema>): P
             message: 'Nation not found'
         };
     }
+    // World isolation: the nation must belong to this world, not merely exist. (#67 — CodeRabbit)
+    if (nation.worldId !== args.worldId) {
+        return {
+            error: true,
+            actionType: 'submit_actions',
+            message: 'Nation does not belong to this world'
+        };
+    }
 
     // A nation that already marked ready has locked in its turn — it must not be
     // able to submit or alter its queued actions afterward. (#67 — CodeRabbit)
@@ -337,6 +345,14 @@ async function handleMarkReady(args: z.infer<typeof MarkReadySchema>): Promise<o
             error: true,
             actionType: 'mark_ready',
             message: 'Nation not found'
+        };
+    }
+    // World isolation: the nation must belong to this world, not merely exist. (#67 — CodeRabbit)
+    if (nation.worldId !== args.worldId) {
+        return {
+            error: true,
+            actionType: 'mark_ready',
+            message: 'Nation does not belong to this world'
         };
     }
 

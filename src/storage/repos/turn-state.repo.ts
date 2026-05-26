@@ -99,8 +99,10 @@ export class TurnStateRepository {
 
     /** All queued actions for a turn, grouped by nation (submission order). */
     getQueuedActions(worldId: string, turn: number): Array<{ nationId: string; actions: TurnAction[] }> {
+        // Order by nation_id, not created_at: resolution must be deterministic and
+        // neutral, not biased by which nation happened to submit first. (#67 — CodeRabbit)
         const stmt = this.db.prepare(
-            'SELECT nation_id, actions FROM turn_action_queue WHERE world_id = ? AND turn = ? ORDER BY created_at'
+            'SELECT nation_id, actions FROM turn_action_queue WHERE world_id = ? AND turn = ? ORDER BY nation_id'
         );
         const rows = stmt.all(worldId, turn) as Array<{ nation_id: string; actions: string }>;
         // Validate persisted payloads instead of trusting a raw cast — a malformed
