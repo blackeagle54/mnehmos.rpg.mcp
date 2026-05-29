@@ -118,8 +118,12 @@ export function validateStructurePlacement(
         };
     }
     
-    // Additional elevation check for sea level (elevation < 20 is typically water)
-    if (elevation < 20 && structureType !== StructureType.RUINS) {
+    // Sea-level guard. The biome check above is the authoritative water gate
+    // (it rejects OCEAN/DEEP_OCEAN/LAKE). This runs against the POST-normalization
+    // world where ocean = 0 and land = 1..100, so only elevation <= 0 is below
+    // sea level. The previous `< 20` used the raw PRE-normalization cutoff and
+    // wrongly rejected legitimate low-elevation land (1..19). (#66)
+    if (elevation <= 0 && structureType !== StructureType.RUINS) {
         return {
             valid: false,
             reason: `Location (${x}, ${y}) is below sea level (elevation: ${elevation})`,
