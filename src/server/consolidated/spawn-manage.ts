@@ -1040,6 +1040,24 @@ async function handleSpawnTactical(input: SpawnManageInput, ctx: SessionContext)
 }
 
 // Main handler
+/**
+ * Re-tag a forwarded tool response so its embedded JSON envelope uses the
+ * SPAWN_MANAGE marker. spawn_quick_enemy delegates to combat_manage, but clients
+ * parsing spawn_manage output expect a SPAWN_MANAGE envelope — without this the
+ * delegated action would leak combat_manage's marker and break the per-tool
+ * response contract. (#20)
+ */
+function reEnvelopeAsSpawnManage(response: McpResponse): McpResponse {
+    const text = response.content?.[0]?.text;
+    if (typeof text !== 'string') return response;
+    const retagged = text.replace(
+        /<!-- (\w+)_JSON\n([\s\S]*?)\n\1_JSON -->/,
+        (_match, _tag, body) => `<!-- SPAWN_MANAGE_JSON\n${body}\nSPAWN_MANAGE_JSON -->`
+    );
+    if (retagged === text) return response;
+    return { content: [{ type: 'text', text: retagged }] };
+}
+
 export async function handleSpawnManage(args: unknown, ctx: SessionContext): Promise<McpResponse> {
     const input = SpawnManageInputSchema.parse(args);
     const matchResult = matchAction(input.action, ACTIONS, ALIASES, 0.6);
@@ -1065,18 +1083,22 @@ export async function handleSpawnManage(args: unknown, ctx: SessionContext): Pro
             return handleSpawnPresetLocation(input, ctx);
         case 'spawn_tactical':
             return handleSpawnTactical(input, ctx);
-        case 'spawn_quick_enemy':
+        case 'spawn_quick_enemy': {
             // Forward to combat_manage, which owns the spawn_quick_enemy
             // implementation. Normalize the action (the caller may have used an
             // alias like "quick_enemy") and pass only the fields combat_manage
-            // expects — deliberately omitting spawn_manage's string `position`. (#20)
-            return handleCombatManage({
+            // expects — deliberately omitting spawn_manage's string `position`.
+            // Re-tag the response so spawn_manage clients still get a
+            // SPAWN_MANAGE envelope. (#20)
+            const forwarded = await handleCombatManage({
                 action: 'spawn_quick_enemy',
                 creature: input.creature,
                 count: input.count,
                 encounterId: input.encounterId,
                 seed: input.seed
             }, ctx);
+            return reEnvelopeAsSpawnManage(forwarded);
+        }
         default:
             return {
                 content: [{

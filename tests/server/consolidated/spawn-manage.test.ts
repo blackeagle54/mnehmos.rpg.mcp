@@ -503,7 +503,7 @@ describe('spawn_manage consolidated tool', () => {
     // returned `Unknown action: "spawn_quick_enemy"`, so the documented action
     // never worked from spawn_manage. Forward it to combat_manage instead.
     describe('spawn_quick_enemy forwarding (issue #20)', () => {
-        it('forwards spawn_quick_enemy to combat_manage instead of an Unknown-action error', async () => {
+        it('forwards spawn_quick_enemy to combat_manage while preserving the spawn_manage envelope (issue #20)', async () => {
             const result = await handleSpawnManage({
                 action: 'spawn_quick_enemy',
                 creature: 'goblin',
@@ -512,11 +512,17 @@ describe('spawn_manage consolidated tool', () => {
 
             const text = result.content[0].text;
             expect(text).not.toContain('Unknown action');
-            // The forwarded combat_manage success response carries spawnedCount.
-            expect(text).toContain('spawnedCount');
+            // Contract: spawn_manage actions must emit the SPAWN_MANAGE envelope even
+            // when the action is delegated to combat_manage. (CodeRabbit, PR #26)
+            expect(text).toContain('<!-- SPAWN_MANAGE_JSON');
+            expect(text).not.toContain('COMBAT_MANAGE_JSON');
+
+            const data = parseResult(result);
+            expect(data.actionType).toBe('spawn_quick_enemy');
+            expect(data.spawnedCount).toBe(3);
         });
 
-        it('routes the "quick_enemy" alias to the forwarded action', async () => {
+        it('routes the "quick_enemy" alias through the same forwarded, re-enveloped path', async () => {
             const result = await handleSpawnManage({
                 action: 'quick_enemy',
                 creature: 'goblin'
@@ -524,7 +530,9 @@ describe('spawn_manage consolidated tool', () => {
 
             const text = result.content[0].text;
             expect(text).not.toContain('Unknown action');
-            expect(text).toContain('spawnedCount');
+            expect(text).toContain('<!-- SPAWN_MANAGE_JSON');
+            const data = parseResult(result);
+            expect(data.actionType).toBe('spawn_quick_enemy');
         });
     });
 });
