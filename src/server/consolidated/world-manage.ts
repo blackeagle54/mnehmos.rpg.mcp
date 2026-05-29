@@ -13,7 +13,7 @@ import { RichFormatter } from '../utils/formatter.js';
 import { getDb } from '../../storage/index.js';
 import { resolveConsolidatedDbPath } from './db-path.js';
 import { WorldRepository } from '../../storage/repos/world.repo.js';
-import { World } from '../../schema/world.js';
+import { World, EnvironmentSchema } from '../../schema/world.js';
 import { generateWorld as generateWorldProc } from '../../engine/worldgen/index.js';
 import { getWorldManager } from '../state/world-manager.js';
 
@@ -63,13 +63,14 @@ const DeleteSchema = z.object({
 const UpdateSchema = z.object({
     action: z.literal('update'),
     id: z.string().describe('World ID'),
-    environment: z.object({
-        dayNightCycle: z.enum(['day', 'night', 'dawn', 'dusk']).optional(),
-        weather: z.string().optional(),
+    // Derived from the canonical EnvironmentSchema so the tool input cannot drift
+    // from the stored/readable fields. `season` is constrained to an enum at the
+    // tool boundary, plus deprecated aliases normalized in handleUpdate. (#65)
+    environment: EnvironmentSchema.extend({
         season: z.enum(['spring', 'summer', 'autumn', 'winter']).optional(),
-        temperature: z.string().optional(),
-        lighting: z.string().optional()
-    }).passthrough().describe('Environment properties to update')
+        dayNightCycle: z.enum(['day', 'night', 'dawn', 'dusk']).optional().describe('Deprecated: use timeOfDay'),
+        weather: z.string().optional().describe('Deprecated: use weatherConditions')
+    }).passthrough().describe('Environment properties to update (canonical field names match the stored world environment)')
 });
 
 const GenerateSchema = z.object({
@@ -176,9 +177,28 @@ async function handleDelete(args: z.infer<typeof DeleteSchema>): Promise<object>
     };
 }
 
+/**
+ * Map deprecated environment field aliases onto the canonical names used by
+ * WorldSchema.environment and readers (session_manage reads `timeOfDay`). Without
+ * this, update_world_environment writes via the documented legacy fields
+ * (dayNightCycle/weather) never reached the canonical fields. (#65)
+ */
+function normalizeEnvironmentPatch(env: Record<string, unknown>): Record<string, unknown> {
+    const { dayNightCycle, weather, ...rest } = env;
+    const normalized: Record<string, unknown> = { ...rest };
+    if (dayNightCycle !== undefined && normalized.timeOfDay === undefined) {
+        normalized.timeOfDay = dayNightCycle;
+    }
+    if (weather !== undefined && normalized.weatherConditions === undefined) {
+        normalized.weatherConditions = weather;
+    }
+    return normalized;
+}
+
 async function handleUpdate(args: z.infer<typeof UpdateSchema>): Promise<object> {
     const worldRepo = getWorldRepo();
-    const updated = worldRepo.updateEnvironment(args.id, args.environment);
+    const environment = normalizeEnvironmentPatch(args.environment as Record<string, unknown>);
+    const updated = worldRepo.updateEnvironment(args.id, environment);
 
     if (!updated) {
         return { error: true, message: `World not found: ${args.id}` };
@@ -188,7 +208,7 @@ async function handleUpdate(args: z.infer<typeof UpdateSchema>): Promise<object>
         success: true,
         actionType: 'update',
         worldId: args.id,
-        environment: args.environment,
+        environment: updated.environment,
         message: `Updated environment for world ${args.id}`
     };
 }

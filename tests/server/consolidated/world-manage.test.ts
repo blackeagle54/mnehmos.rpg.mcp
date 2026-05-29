@@ -232,6 +232,42 @@ describe('world_manage consolidated tool', () => {
             const data = parseResult(result);
             expect(data.actionType).toBe('update');
         });
+
+        // Regression for issue #65: the tool's documented update fields
+        // (dayNightCycle/weather) drifted from the canonical world-environment
+        // fields (timeOfDay/weatherConditions) that readers like session_manage
+        // use, so writes via the documented fields never reached the reader.
+        it('maps deprecated dayNightCycle/weather onto canonical timeOfDay/weatherConditions (#65)', async () => {
+            const createResult = await handleWorldManage({
+                action: 'create', name: 'Drift World', seed: 'drift', width: 20, height: 20
+            }, ctx);
+            const worldId = parseResult(createResult).worldId;
+
+            await handleWorldManage({
+                action: 'update', id: worldId,
+                environment: { dayNightCycle: 'night', weather: 'storm' }
+            }, ctx);
+
+            const got = parseResult(await handleWorldManage({ action: 'get', id: worldId }, ctx));
+            expect(got.world.environment.timeOfDay).toBe('night');
+            expect(got.world.environment.weatherConditions).toBe('storm');
+        });
+
+        it('accepts canonical timeOfDay/weatherConditions directly (#65)', async () => {
+            const createResult = await handleWorldManage({
+                action: 'create', name: 'Canon World', seed: 'canon', width: 20, height: 20
+            }, ctx);
+            const worldId = parseResult(createResult).worldId;
+
+            await handleWorldManage({
+                action: 'update', id: worldId,
+                environment: { timeOfDay: 'dusk', weatherConditions: 'rain' }
+            }, ctx);
+
+            const got = parseResult(await handleWorldManage({ action: 'get', id: worldId }, ctx));
+            expect(got.world.environment.timeOfDay).toBe('dusk');
+            expect(got.world.environment.weatherConditions).toBe('rain');
+        });
     });
 
     describe('generate action', () => {
