@@ -872,6 +872,24 @@ function runMigrations(db: Database.Database) {
     db.exec(`ALTER TABLE quests ADD COLUMN skill_requirements TEXT DEFAULT '[]';`);
   }
 
+  // PHASE-3: Add chain column to quests for quest-chain graph metadata.
+  // Guarded ALTER (same rationale as skill_requirements above); defaults to '{}'
+  // so existing quests have no chain links (defaults-on-read fills the shape).
+  const hasChain = questColumns.some(col => col.name === 'chain');
+  if (!hasChain) {
+    console.error('[Migration] Adding chain column to quests table');
+    db.exec(`ALTER TABLE quests ADD COLUMN chain TEXT DEFAULT '{}';`);
+  }
+
+  // PHASE-3: Add chain_choices column to quest_logs for per-character branch
+  // selections. Guarded ALTER; defaults to '{}' for legacy logs.
+  const questLogColumns = db.prepare("PRAGMA table_info(quest_logs)").all() as { name: string }[];
+  const hasChainChoices = questLogColumns.some(col => col.name === 'chain_choices');
+  if (!hasChainChoices) {
+    console.error('[Migration] Adding chain_choices column to quest_logs table');
+    db.exec(`ALTER TABLE quest_logs ADD COLUMN chain_choices TEXT DEFAULT '{}';`);
+  }
+
   // Migration: Rename world_x/world_y to local_x/local_y if needed
   const hasWorldX = roomColumns.some(col => col.name === 'world_x');
   const hasWorldY = roomColumns.some(col => col.name === 'world_y');
