@@ -4,8 +4,8 @@
 [![License: ISC](https://img.shields.io/badge/license-ISC-blue.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue.svg)]()
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)]()
-[![Tests](https://img.shields.io/badge/tests-1889%20passing-brightgreen.svg)]()
-[![Tools](https://img.shields.io/badge/MCP%20tools-32-blue.svg)]()
+[![Tests](https://img.shields.io/badge/tests-2285%20passing-brightgreen.svg)]()
+[![Tools](https://img.shields.io/badge/MCP%20tools-35-blue.svg)]()
 
 **A rules-enforced RPG backend that turns any LLM into a game master who can't cheat.**
 

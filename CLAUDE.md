@@ -36,7 +36,7 @@ src/
 ├── utils/        # Action router, fuzzy matching
 └── math/         # Dice, algebra, physics
 
-tests/            # Mirror of src/ structure (85+ files)
+tests/            # Mirror of src/ structure (140 test files)
 docs/             # White paper, ADRs, LLM spatial guide
 ```
 
