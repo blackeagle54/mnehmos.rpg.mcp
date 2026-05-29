@@ -242,12 +242,19 @@ async function handleGenerate(args: z.infer<typeof GenerateSchema>): Promise<obj
         width: args.width,
         height: args.height,
         createdAt: now,
-        updatedAt: now
+        updatedAt: now,
+        // Persist generation options so the world rehydrates identically. (#61)
+        genOptions: {
+            landRatio: args.landRatio,
+            temperatureOffset: args.temperatureOffset,
+            moistureOffset: args.moistureOffset
+        }
     };
 
     worldRepo.create(world);
 
-    // Store in memory for fast access
+    // Store in memory keyed on the bare worldId — the canonical key getOrRestoreWorld
+    // also uses, so a generate→use sequence hits the cache instead of regenerating. (#61)
     worldManager.create(world.id, generatedWorld);
 
     // Calculate biome stats from 2D biomes array
