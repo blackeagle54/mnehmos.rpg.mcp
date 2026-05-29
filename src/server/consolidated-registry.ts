@@ -60,10 +60,14 @@ export function buildConsolidatedRegistry(): ToolRegistry {
 
         // Fail loud: a tool that omits its discovery metadata is a bug, not a
         // default-to-'meta' situation. Name the offending tool and the file to fix.
+        const hasBlank = (arr: unknown): boolean =>
+            !Array.isArray(arr) ||
+            arr.length === 0 ||
+            arr.some((s) => typeof s !== 'string' || s.trim() === '');
         if (
             !t.category ||
-            !Array.isArray(t.keywords) || t.keywords.length === 0 ||
-            !Array.isArray(t.capabilities) || t.capabilities.length === 0
+            hasBlank(t.keywords) ||
+            hasBlank(t.capabilities)
         ) {
             throw new Error(
                 `[Registry] Tool "${name}" is missing required discovery metadata ` +

@@ -3,6 +3,8 @@
  * Enables search_tools discovery and load_tool_schema on-demand loading
  */
 
+import { z } from 'zod';
+
 export type ToolCategory =
   | 'world' | 'combat' | 'character' | 'inventory' | 'quest' | 'party'
   | 'math' | 'strategy' | 'secret' | 'concentration' | 'rest' | 'scroll'
@@ -40,12 +42,12 @@ export interface ToolContract {
   category: ToolCategory;
   keywords: string[];
   capabilities: string[];
-  inputSchema: any; // Zod schema (kept `any` to match existing untyped literals)
+  inputSchema: z.ZodTypeAny; // Zod schema — typed so a non-Zod value fails under `satisfies ToolContract`
 }
 
 export interface ToolRegistryEntry {
   metadata: ToolMetadata;
-  schema: any; // Zod schema
+  schema: z.ZodTypeAny; // Zod schema
   handler: Function;
 }
 
