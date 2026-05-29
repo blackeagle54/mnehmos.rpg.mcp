@@ -274,22 +274,30 @@ describe('world_manage consolidated tool', () => {
         // alias already persisted on a legacy world is not removed merely by
         // omitting it from the patch. A canonical update must converge — clear it.
         it('clears deprecated alias keys already persisted on a legacy world (#65)', async () => {
+            const db = getDb(':memory:');
+            const readRawEnv = (id: string) =>
+                JSON.parse((db.prepare('SELECT environment FROM worlds WHERE id = ?').get(id) as { environment: string }).environment);
+
             const createResult = await handleWorldManage({
                 action: 'create', name: 'Legacy World', seed: 'legacy', width: 20, height: 20
             }, ctx);
             const worldId = parseResult(createResult).worldId;
 
-            // Simulate a record written before canonicalization (raw alias persisted).
-            new WorldRepository(getDb(':memory:')).updateEnvironment(worldId, { dayNightCycle: 'night' });
+            // Simulate a record written before canonicalization (raw alias persisted),
+            // and assert the legacy write actually took effect in raw storage.
+            new WorldRepository(db).updateEnvironment(worldId, { dayNightCycle: 'night' });
+            expect(readRawEnv(worldId).dayNightCycle).toBe('night');
 
             await handleWorldManage({
                 action: 'update', id: worldId,
                 environment: { weatherConditions: 'clear' }
             }, ctx);
 
-            const got = parseResult(await handleWorldManage({ action: 'get', id: worldId }, ctx));
-            expect(got.world.environment.dayNightCycle).toBeUndefined();
-            expect(got.world.environment.weatherConditions).toBe('clear');
+            // Assert against the RAW stored JSON (not the get handler's output): the
+            // canonical update must have removed the persisted legacy alias.
+            const rawAfter = readRawEnv(worldId);
+            expect(rawAfter.dayNightCycle).toBeUndefined();
+            expect(rawAfter.weatherConditions).toBe('clear');
         });
     });
 
