@@ -14,6 +14,11 @@ reviews:
   auto_review:
     enabled: true
     drafts: false
+    # Don't re-review on every push — incremental re-reviews fight rapid TDD
+    # red→green→refactor bursts (and re-flag in-flight commits). Iterate freely,
+    # then trigger one clean pass with `@coderabbitai review` when a cycle is green.
+    auto_incremental_review: false
+    auto_pause_after_reviewed_commits: 3
     base_branches:
       - "development"
       - "staging"

@@ -4,8 +4,8 @@
 [![License: ISC](https://img.shields.io/badge/license-ISC-blue.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue.svg)]()
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)]()
-[![Tests](https://img.shields.io/badge/tests-1889%20passing-brightgreen.svg)]()
-[![Tools](https://img.shields.io/badge/MCP%20tools-32-blue.svg)]()
+[![Tests](https://img.shields.io/badge/tests-2285%20passing-brightgreen.svg)]()
+[![Tools](https://img.shields.io/badge/MCP%20tools-35-blue.svg)]()
 
 **A rules-enforced RPG backend that turns any LLM into a game master who can't cheat.**
 
@@ -224,7 +224,7 @@ git clone https://github.com/Mnehmos/rpg-mcp.git
 cd rpg-mcp
 npm install
 npm run build
-npm test  # 1889 tests should pass
+npm test  # 2285 tests should pass
 ```
 
 ### MCP Client Configuration
@@ -327,7 +327,7 @@ src/
     ├── fuzzy-enum.ts      # Action matching with typo tolerance
     └── schema-shorthand.ts # Token-efficient parsing
 
-tests/                # 1889 tests mirroring src/ structure
+tests/                # 2285 tests mirroring src/ structure
 docs/                 # White paper and LLM spatial guide
 ```
 
@@ -354,7 +354,7 @@ docs/                 # White paper and LLM spatial guide
    LLMs cannot cast spells they don't know or claim damage they didn't roll.
 
 7. **Token efficiency**
-   28 consolidated tools with action routing reduce context overhead by 85%.
+   31 consolidated tools with action routing reduce context overhead by 85%.
 
 8. **Guiding errors**
    Invalid actions return suggestions, not just failures.
@@ -365,9 +365,9 @@ docs/                 # White paper and LLM spatial guide
 
 ```bash
 npm test
-# 1889 tests passing, 6 skipped
-# 85+ test files
-# Coverage across all 32 tools (28 consolidated + 4 meta/event)
+# 2285 tests passing, 6 skipped
+# 140 test files
+# Coverage across all 35 tools (31 consolidated + 4 meta/event)
 ```
 
 ---
