@@ -7,6 +7,7 @@ import {
     SpellcastingAbilitySchema
 } from './spell.js';
 import { SkillsSchema } from './skill.js';
+import { CharacterAchievementsSchema } from './achievement.js';
 
 export const CharacterSchema = z.object({
     id: z.string(),
@@ -101,6 +102,12 @@ export const CharacterSchema = z.object({
     // .optional() is LOAD-BEARING: the existing character rows have no skills and
     // must still parse; the tool layer defaults-on-read to the all-{xp:0,level:1} map.
     skills: SkillsSchema.optional(),
+
+    // PHASE-3: per-character achievement unlock/progress map (sparse, keyed by
+    // achievementId). .optional() is LOAD-BEARING for the same back-compat reason
+    // as skills: legacy rows have no `achievements` column and must still parse;
+    // the tool layer defaults-on-read to {}.
+    achievements: CharacterAchievementsSchema.optional(),
 
     createdAt: z.string().datetime(),
     updatedAt: z.string().datetime(),

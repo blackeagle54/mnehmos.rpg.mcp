@@ -3,15 +3,16 @@
  *
  * Each consolidated tool must be the single source of truth for its discovery
  * metadata (category/keywords/capabilities). These tests assert that:
- *  - all 29 tools are exported,
+ *  - all 30 tools are exported,
  *  - each tool owns non-empty category/keywords/capabilities on its contract,
  *  - buildConsolidatedRegistry() derives that metadata FROM the contract (parity),
  *  - the moved values match the historical TOOL_* map values VERBATIM (no drift).
  *
  * The EXPECTED_METADATA fixture is a frozen snapshot of the original
  * TOOL_CATEGORIES / TOOL_KEYWORDS / TOOL_CAPABILITIES maps that previously lived
- * in src/server/consolidated-registry.ts (plus Phase-3 skill_manage). Any
- * transcription error across the 29 tool files is caught here.
+ * in src/server/consolidated-registry.ts (plus Phase-3 skill_manage and
+ * achievement_manage). Any transcription error across the 30 tool files is
+ * caught here.
  */
 
 import { ConsolidatedTools } from '../../../src/server/consolidated/index.js';
@@ -112,6 +113,11 @@ const EXPECTED_METADATA: Record<
     keywords: ['skill', 'xp', 'rank', 'train', 'proficiency'],
     capabilities: ['Per-skill XP', 'Skill levels', 'Training'],
   },
+  achievement_manage: {
+    category: 'character',
+    keywords: ['achievement', 'unlock', 'trophy', 'milestone', 'badge', 'reward'],
+    capabilities: ['Achievement catalog', 'Unlock tracking', 'Progress milestones'],
+  },
   npc_manage: {
     category: 'npc',
     keywords: ['npc', 'relationship', 'memory', 'conversation', 'social'],
@@ -170,8 +176,8 @@ const EXPECTED_METADATA: Record<
 };
 
 describe('consolidated tool contract parity (#13 ADR-001)', () => {
-  it('exports all 29 consolidated tools', () => {
-    expect(ConsolidatedTools.length).toBe(29);
+  it('exports all 30 consolidated tools', () => {
+    expect(ConsolidatedTools.length).toBe(30);
   });
 
   // RED: today tool objects only carry {name,description,inputSchema}
@@ -199,7 +205,7 @@ describe('consolidated tool contract parity (#13 ADR-001)', () => {
     }
   });
 
-  // Data-driven verbatim check across ALL 29 tools — the main transcription guard.
+  // Data-driven verbatim check across ALL 30 tools — the main transcription guard.
   it.each(ConsolidatedTools.map(({ tool }) => [tool.name, tool] as const))(
     '%s matches the historical TOOL_* map values verbatim',
     (name, tool: any) => {
@@ -212,7 +218,7 @@ describe('consolidated tool contract parity (#13 ADR-001)', () => {
   );
 
   // Every tool in the fixture must be present in the exported set (no orphan/typo).
-  it('covers exactly the 29 tools named in the fixture', () => {
+  it('covers exactly the 30 tools named in the fixture', () => {
     const exportedNames = ConsolidatedTools.map(({ tool }) => tool.name).sort();
     const fixtureNames = Object.keys(EXPECTED_METADATA).sort();
     expect(exportedNames).toEqual(fixtureNames);

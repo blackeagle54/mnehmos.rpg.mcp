@@ -16,13 +16,13 @@ export class CharacterRepository {
                               cantrips_known, max_spell_level, concentrating_on, conditions,
                               legendary_actions, legendary_actions_remaining, legendary_resistances,
                               legendary_resistances_remaining, has_lair_actions, resistances, vulnerabilities, immunities,
-                              current_room_id, perception_bonus, stealth_bonus, skills, created_at, updated_at)
+                              current_room_id, perception_bonus, stealth_bonus, skills, achievements, created_at, updated_at)
       VALUES (@id, @name, @stats, @hp, @maxHp, @ac, @level, @xp, @factionId, @behavior, @characterType,
               @characterClass, @race, @spellSlots, @pactMagicSlots, @knownSpells, @preparedSpells,
               @cantripsKnown, @maxSpellLevel, @concentratingOn, @conditions,
               @legendaryActions, @legendaryActionsRemaining, @legendaryResistances,
               @legendaryResistancesRemaining, @hasLairActions, @resistances, @vulnerabilities, @immunities,
-              @currentRoomId, @perceptionBonus, @stealthBonus, @skills, @createdAt, @updatedAt)
+              @currentRoomId, @perceptionBonus, @stealthBonus, @skills, @achievements, @createdAt, @updatedAt)
     `);
 
         stmt.run({
@@ -64,6 +64,8 @@ export class CharacterRepository {
             stealthBonus: validChar.stealthBonus || 0,
             // PHASE-3: OSRS-style skills (null for legacy/skill-less characters)
             skills: validChar.skills ? JSON.stringify(validChar.skills) : null,
+            // PHASE-3: per-character achievement unlock/progress (null for legacy rows)
+            achievements: validChar.achievements ? JSON.stringify(validChar.achievements) : null,
             createdAt: validChar.createdAt,
             updatedAt: validChar.updatedAt,
         });
@@ -121,7 +123,7 @@ export class CharacterRepository {
                 legendary_actions = ?, legendary_actions_remaining = ?,
                 legendary_resistances = ?, legendary_resistances_remaining = ?,
                 has_lair_actions = ?, resistances = ?, vulnerabilities = ?, immunities = ?,
-                current_room_id = ?, perception_bonus = ?, stealth_bonus = ?, skills = ?, updated_at = ?
+                current_room_id = ?, perception_bonus = ?, stealth_bonus = ?, skills = ?, achievements = ?, updated_at = ?
             WHERE id = ?
         `);
 
@@ -163,6 +165,8 @@ export class CharacterRepository {
             validChar.stealthBonus || 0,
             // PHASE-3: OSRS-style skills (null for legacy/skill-less characters)
             validChar.skills ? JSON.stringify(validChar.skills) : null,
+            // PHASE-3: per-character achievement unlock/progress (null for legacy rows)
+            validChar.achievements ? JSON.stringify(validChar.achievements) : null,
             validChar.updatedAt,
             id
         );
@@ -214,6 +218,8 @@ export class CharacterRepository {
             stealthBonus: row.stealth_bonus ?? 0,
             // PHASE-3: OSRS-style skills — undefined for legacy rows (back-compat)
             skills: row.skills ? JSON.parse(row.skills) : undefined,
+            // PHASE-3: achievement unlock/progress — undefined for legacy rows (back-compat)
+            achievements: row.achievements ? JSON.parse(row.achievements) : undefined,
             createdAt: row.created_at,
             updatedAt: row.updated_at,
         };
@@ -269,6 +275,8 @@ interface CharacterRow {
     stealth_bonus: number | null;
     // PHASE-3: OSRS-style skills (JSON or null for legacy rows)
     skills?: string | null;
+    // PHASE-3: achievement unlock/progress (JSON or null for legacy rows)
+    achievements?: string | null;
     created_at: string;
     updated_at: string;
 }
