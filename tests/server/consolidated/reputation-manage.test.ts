@@ -25,6 +25,7 @@ import {
 } from '../../../src/server/consolidated/reputation-manage.js';
 import {
     standingFromValue,
+    ReputationEntrySchema,
     REPUTATION_MIN,
     REPUTATION_MAX,
 } from '../../../src/schema/reputation.js';
@@ -125,6 +126,24 @@ describe('reputation_manage consolidated tool', () => {
         it('exports the clamp bounds', () => {
             expect(REPUTATION_MIN).toBe(-1000);
             expect(REPUTATION_MAX).toBe(1000);
+        });
+
+        it('keeps ±Infinity at the extreme tiers (only NaN falls back to Neutral)', () => {
+            // Infinity must resolve to the top tier, not collapse to Neutral.
+            expect(standingFromValue(Infinity)).toBe('Exalted');
+            expect(standingFromValue(-Infinity)).toBe('Hated');
+            // Only NaN is undefined input → safe Neutral floor.
+            expect(standingFromValue(NaN)).toBe('Neutral');
+        });
+    });
+
+    describe('ReputationEntrySchema (persisted invariant)', () => {
+        it('rejects values outside the clamp range so DB/JSON state stays in-contract', () => {
+            expect(ReputationEntrySchema.safeParse({ value: 500 }).success).toBe(true);
+            expect(ReputationEntrySchema.safeParse({ value: REPUTATION_MAX }).success).toBe(true);
+            expect(ReputationEntrySchema.safeParse({ value: REPUTATION_MIN }).success).toBe(true);
+            expect(ReputationEntrySchema.safeParse({ value: REPUTATION_MAX + 1 }).success).toBe(false);
+            expect(ReputationEntrySchema.safeParse({ value: REPUTATION_MIN - 1 }).success).toBe(false);
         });
     });
 

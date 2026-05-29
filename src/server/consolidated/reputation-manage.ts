@@ -208,6 +208,12 @@ async function handleAdjust(args: z.infer<typeof AdjustSchema>): Promise<object>
     const newValue = clampValue(oldValue + args.amount);
     reputation[args.factionId] = { value: newValue };
 
+    // Atomic by construction: findById → mutate → update runs synchronously with
+    // NO await between read and write, and better-sqlite3 is synchronous over a
+    // single process-global connection, so no other handler can interleave inside
+    // this critical section (same read-modify-write idiom as skill_manage /
+    // achievement_manage). The only real race — character deletion between read
+    // and write — is caught by the update()-returns-null guard below.
     const updated = characterRepo.update(args.characterId, { reputation });
     if (!updated) {
         // TOCTOU: character deleted between read and write.
@@ -248,6 +254,8 @@ async function handleSet(args: z.infer<typeof SetSchema>): Promise<object> {
     const value = clampValue(args.value);
     reputation[args.factionId] = { value };
 
+    // Atomic for the same reason as handleAdjust: synchronous read-modify-write
+    // with no await between, single process-global better-sqlite3 connection.
     const updated = characterRepo.update(args.characterId, { reputation });
     if (!updated) {
         return { error: true, message: `Character ${args.characterId} not found` };

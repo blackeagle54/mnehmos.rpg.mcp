@@ -55,9 +55,10 @@ export type ReputationStanding =
  * so callers may pass a raw value safely; the tool layer clamps on write.
  */
 export function standingFromValue(value: number): ReputationStanding {
-    // Coerce non-finite input to the safe floor (0 / Neutral) so NaN/-∞ never
-    // slips through to a bogus tier.
-    const safe = Number.isFinite(value) ? value : 0;
+    // Only NaN is undefined input → safe Neutral floor. ±Infinity must pass
+    // through so the tiers resolve correctly (Infinity ≥ 1000 → Exalted,
+    // -Infinity → Hated via the final -Infinity tier), per this fn's contract.
+    const safe = Number.isNaN(value) ? 0 : value;
     for (const tier of REPUTATION_TIERS) {
         if (safe >= tier.min) return tier.standing;
     }
@@ -86,7 +87,9 @@ export type FactionDefinition = z.infer<typeof FactionDefinitionSchema>;
  * leaves room for future per-faction metadata without a column change.)
  */
 export const ReputationEntrySchema = z.object({
-    value: z.number().int(),
+    // Bound to the clamp range so persisted DB/JSON state can never hold an
+    // out-of-contract value (the tool layer also clamps on write).
+    value: z.number().int().min(REPUTATION_MIN).max(REPUTATION_MAX),
 });
 export type ReputationEntry = z.infer<typeof ReputationEntrySchema>;
 
