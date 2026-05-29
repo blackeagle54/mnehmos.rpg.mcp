@@ -8,6 +8,7 @@ export * from './structure.js';
 export * from './river.js';
 export * from './spell.js';
 export * from './character.js';
+export * from './skill.js';
 export * from './encounter.js';
 export * from './patch.js';
 export * from './quest.js';
