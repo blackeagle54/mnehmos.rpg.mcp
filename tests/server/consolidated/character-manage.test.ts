@@ -279,6 +279,33 @@ describe('character_manage consolidated tool', () => {
             expect(p.spellSlots.level1.max).toBe(3);
         });
 
+        // Regression for issue #33: provisionStartingEquipment emitted warlock
+        // pact slots in the legacy { slots, level } shape, but PactMagicSlotsSchema
+        // (and the persisted Character schema) require { current, max, slotLevel }.
+        // The raw object flowed into characterRepo.update -> CharacterSchema.parse,
+        // throwing a ZodError and crashing EVERY Warlock/pact-magic PC creation
+        // once provisioning ran (the default for PCs). No existing test exercised
+        // the handleCharacterManage create -> provisioning path for a Warlock.
+        it('creates a Warlock with pact magic slots in the canonical shape (issue #33)', async () => {
+            const result = await handleCharacterManage({
+                action: 'create', name: 'Pact Warlock', class: 'Warlock', level: 1
+            }, ctx);
+            const parsed = extractJson(result.content[0].text);
+            expect(parsed.success).toBe(true);
+            // L1 warlock pact table = [1,0,..] -> one 1st-level slot
+            expect(parsed.pactMagicSlots).toEqual({ current: 1, max: 1, slotLevel: 1 });
+        });
+
+        it('seeds Warlock pact slot level from the pact-magic table (L5 -> slotLevel 3)', async () => {
+            const result = await handleCharacterManage({
+                action: 'create', name: 'Veteran Warlock', class: 'Warlock', level: 5
+            }, ctx);
+            const parsed = extractJson(result.content[0].text);
+            expect(parsed.success).toBe(true);
+            // L5 warlock pact table = [0,0,2,..] -> two 3rd-level slots
+            expect(parsed.pactMagicSlots).toEqual({ current: 2, max: 2, slotLevel: 3 });
+        });
+
         it('should skip provisioning when provisionEquipment is false', async () => {
             const result = await handleCharacterManage({
                 action: 'create',
