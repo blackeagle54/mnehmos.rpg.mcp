@@ -6,6 +6,7 @@ import { PubSub } from '../engine/pubsub.js';
 
 import { randomUUID } from 'crypto';
 import { getWorldManager } from './state/world-manager.js';
+import { resolveConsolidatedDbPath } from './consolidated/db-path.js';
 import { SessionContext } from './types.js';
 import { WorldRepository } from '../storage/repos/world.repo.js';
 import { getDb } from '../storage/index.js';
@@ -161,7 +162,7 @@ function invalidateTileCache(db: any, worldId: string) {
     }
 }
 
-export async function handleGenerateWorld(args: unknown, ctx: SessionContext) {
+export async function handleGenerateWorld(args: unknown, _ctx: SessionContext) {
     const parsed = Tools.GENERATE_WORLD.inputSchema.parse(args);
     
     console.error(`[WorldGen] Generating world with seed "${parsed.seed}" (${parsed.width}x${parsed.height})`);
@@ -180,11 +181,12 @@ export async function handleGenerateWorld(args: unknown, ctx: SessionContext) {
     console.error(`[WorldGen] World generated in ${genTime}ms`);
 
     const worldId = randomUUID();
-    // Store with session namespace in runtime manager
-    getWorldManager().create(`${ctx.sessionId}:${worldId}`, world);
+    // Cache under the bare worldId — the canonical key getOrRestoreWorld also uses,
+    // so a generate→use sequence hits the cache instead of regenerating. (#61)
+    getWorldManager().create(worldId, world);
 
     // Persist world metadata to database
-    const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
+    const db = getDb(resolveConsolidatedDbPath());
     const worldRepo = new WorldRepository(db);
     const now = new Date().toISOString();
     worldRepo.create({
@@ -194,7 +196,13 @@ export async function handleGenerateWorld(args: unknown, ctx: SessionContext) {
         width: parsed.width,
         height: parsed.height,
         createdAt: now,
-        updatedAt: now
+        updatedAt: now,
+        // Persist generation options for lossless rehydration. (#61)
+        genOptions: {
+            landRatio: parsed.landRatio,
+            temperatureOffset: parsed.temperatureOffset,
+            moistureOffset: parsed.moistureOffset
+        }
     });
 
     // Pre-cache the tile data so subsequent loads are instant
@@ -223,16 +231,18 @@ export async function handleGenerateWorld(args: unknown, ctx: SessionContext) {
 }
 
 // Helper to get world from memory or restore from DB
-async function getOrRestoreWorld(worldId: string, sessionId: string) {
+async function getOrRestoreWorld(worldId: string, _sessionId: string) {
     const manager = getWorldManager();
-    const sessionKey = `${sessionId}:${worldId}`;
 
-    // Try memory first
-    let world = manager.get(sessionKey);
+    // Try memory first. Keyed on the bare worldId: a generated world is
+    // deterministic per (seed, options), so a single canonical key lets the
+    // generate and restore paths agree (previously they used different keys, so
+    // the cache always missed and regenerated). (#61)
+    let world = manager.get(worldId);
     if (world) return world;
 
     // Try DB
-    const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
+    const db = getDb(resolveConsolidatedDbPath());
     const worldRepo = new WorldRepository(db);
     const storedWorld = worldRepo.findById(worldId);
 
@@ -240,21 +250,27 @@ async function getOrRestoreWorld(worldId: string, sessionId: string) {
         return null;
     }
 
-    // Re-generate world
+    // Re-generate from the FULL persisted generation contract — seed, dimensions
+    // AND the generation options — so the rehydrated world is identical to the
+    // original. Restoring from seed/width/height alone dropped landRatio/offsets
+    // and produced a materially different world. (#61)
     console.error(`[WorldGen] Restoring world ${worldId} from seed ${storedWorld.seed}`);
     const startTime = Date.now();
-    
+
     world = generateWorld({
         seed: storedWorld.seed,
         width: storedWorld.width,
-        height: storedWorld.height
+        height: storedWorld.height,
+        landRatio: storedWorld.genOptions?.landRatio,
+        temperatureOffset: storedWorld.genOptions?.temperatureOffset,
+        moistureOffset: storedWorld.genOptions?.moistureOffset
     });
 
     const genTime = Date.now() - startTime;
     console.error(`[WorldGen] World restored in ${genTime}ms`);
 
-    // Store in memory
-    manager.create(sessionKey, world);
+    // Store in memory under the same canonical key.
+    manager.create(worldId, world);
     return world;
 }
 
@@ -301,7 +317,7 @@ export async function handleApplyMapPatch(args: unknown, ctx: SessionContext) {
 
         // Only invalidate cache if commands actually executed
         if (result.commandsExecuted > 0) {
-            const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
+            const db = getDb(resolveConsolidatedDbPath());
             invalidateTileCache(db, parsed.worldId);
 
             pubsub?.publish('world', {
@@ -626,7 +642,7 @@ export async function handleGetWorldTiles(args: unknown, ctx: SessionContext) {
     const parsed = Tools.GET_WORLD_TILES.inputSchema.parse(args);
     
     // Check for cached tiles first (much faster)
-    const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
+    const db = getDb(resolveConsolidatedDbPath());
     const cachedTiles = getCachedTiles(db, parsed.worldId);
     
     if (cachedTiles) {

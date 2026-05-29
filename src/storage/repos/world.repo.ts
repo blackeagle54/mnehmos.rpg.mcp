@@ -2,16 +2,20 @@ import Database from 'better-sqlite3';
 import { World, WorldSchema } from '../../schema/world.js';
 
 export class WorldRepository {
-    constructor(private db: Database.Database) { 
-        this.ensureEnvironmentColumn();
+    constructor(private db: Database.Database) {
+        this.ensureColumns();
     }
 
-    private ensureEnvironmentColumn() {
+    private ensureColumns() {
         try {
             const columns = this.db.prepare(`PRAGMA table_info(worlds)`).all() as any[];
-            const hasEnv = columns.some(col => col.name === 'environment');
-            if (!hasEnv) {
+            const names = new Set(columns.map(col => col.name));
+            if (!names.has('environment')) {
                 this.db.exec(`ALTER TABLE worlds ADD COLUMN environment TEXT`);
+            }
+            // Persist procedural generation options for lossless world rehydration. (#61)
+            if (!names.has('gen_options')) {
+                this.db.exec(`ALTER TABLE worlds ADD COLUMN gen_options TEXT`);
             }
         } catch (err) {
             // Ignore if table doesn't exist yet; creation/migrations will handle it
@@ -21,8 +25,8 @@ export class WorldRepository {
     create(world: World): void {
         const validWorld = WorldSchema.parse(world);
         const stmt = this.db.prepare(`
-      INSERT INTO worlds (id, name, seed, width, height, created_at, updated_at, environment)
-      VALUES (@id, @name, @seed, @width, @height, @createdAt, @updatedAt, @environment)
+      INSERT INTO worlds (id, name, seed, width, height, created_at, updated_at, environment, gen_options)
+      VALUES (@id, @name, @seed, @width, @height, @createdAt, @updatedAt, @environment, @genOptions)
     `);
         stmt.run({
             id: validWorld.id,
@@ -32,8 +36,17 @@ export class WorldRepository {
             height: validWorld.height,
             createdAt: validWorld.createdAt,
             updatedAt: validWorld.updatedAt,
-            environment: JSON.stringify(validWorld.environment || {})
+            environment: JSON.stringify(validWorld.environment || {}),
+            genOptions: JSON.stringify(validWorld.genOptions || {})
         });
+    }
+
+    private static parseJsonColumn(value: string | null | undefined): Record<string, unknown> {
+        // A null/empty column means "absent" → {}. But a non-empty value that
+        // fails to parse is corruption: let it throw rather than silently coercing
+        // to {}, which would quietly rehydrate the wrong world. (#61, CodeRabbit)
+        if (!value) return {};
+        return JSON.parse(value);
     }
 
     findById(id: string): World | null {
@@ -41,15 +54,6 @@ export class WorldRepository {
         const row = stmt.get(id) as WorldRow | undefined;
 
         if (!row) return null;
-
-        let environment: any = {};
-        if (row.environment) {
-            try {
-                environment = JSON.parse(row.environment);
-            } catch {
-                environment = {};
-            }
-        }
 
         return WorldSchema.parse({
             id: row.id,
@@ -59,7 +63,8 @@ export class WorldRepository {
             height: row.height,
             createdAt: row.created_at,
             updatedAt: row.updated_at,
-            environment,
+            environment: WorldRepository.parseJsonColumn(row.environment),
+            genOptions: WorldRepository.parseJsonColumn(row.gen_options),
         });
     }
 
@@ -76,14 +81,8 @@ export class WorldRepository {
                 height: row.height,
                 createdAt: row.created_at,
                 updatedAt: row.updated_at,
-                environment: (() => {
-                    if (!row.environment) return {};
-                    try {
-                        return JSON.parse(row.environment);
-                    } catch {
-                        return {};
-                    }
-                })(),
+                environment: WorldRepository.parseJsonColumn(row.environment),
+                genOptions: WorldRepository.parseJsonColumn(row.gen_options),
             })
         );
     }
@@ -130,4 +129,5 @@ interface WorldRow {
     created_at: string;
     updated_at: string;
     environment?: string | null;
+    gen_options?: string | null;
 }

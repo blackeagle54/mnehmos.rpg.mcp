@@ -20,6 +20,25 @@ export const EnvironmentSchema = z
 
 export type Environment = z.infer<typeof EnvironmentSchema>;
 
+/**
+ * Procedural generation options that determine a world's terrain beyond its seed
+ * and dimensions. These MUST be persisted so a world can be regenerated
+ * (rehydrated) identically — restoring from seed/width/height alone drops these
+ * and produces a materially different world. (#61)
+ */
+export const WorldGenOptionsSchema = z
+  .object({
+    // Same bounds the generation tool schemas enforce, so a persisted row cannot
+    // bypass validation and feed an out-of-range value into generateWorld on
+    // restore (DB is the source of truth, but it is still validated). (#61, CodeRabbit)
+    landRatio: z.number().min(0.1).max(0.9).optional(),
+    temperatureOffset: z.number().min(-30).max(30).optional(),
+    moistureOffset: z.number().min(-30).max(30).optional(),
+  })
+  .passthrough();
+
+export type WorldGenOptions = z.infer<typeof WorldGenOptionsSchema>;
+
 export const WorldSchema = z.object({
   id: z.string(),
   name: z.string().min(1),
@@ -29,6 +48,7 @@ export const WorldSchema = z.object({
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
   environment: EnvironmentSchema.optional(),
+  genOptions: WorldGenOptionsSchema.optional(),
 });
 
 export type World = z.infer<typeof WorldSchema>;
