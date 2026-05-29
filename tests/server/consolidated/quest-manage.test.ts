@@ -968,6 +968,28 @@ describe('quest_manage consolidated tool', () => {
                 }, ctx));
                 expect(assignEvil.error).toBe(true);
             });
+
+            // CodeRabbit (#37): a branch cannot be chosen until the character has
+            // COMPLETED the source quest that owns the branches.
+            it('rejects select_branch before the source quest is completed', async () => {
+                const a = await createQuest('Uncompleted Branch Source');
+                const good = await createQuest('Unc Good', { prerequisites: [a] });
+                const evil = await createQuest('Unc Evil', { prerequisites: [a] });
+                await handleQuestManage({
+                    action: 'set_chain', questId: a, chainId: 'unc', order: 0,
+                    branches: [
+                        { choiceId: 'good', label: 'Good', questId: good },
+                        { choiceId: 'evil', label: 'Evil', questId: evil }
+                    ]
+                }, ctx);
+                // Deliberately do NOT complete `a` first.
+
+                const res = parseResult(await handleQuestManage({
+                    action: 'select_branch', characterId: testCharacterId, questId: a, choiceId: 'good'
+                }, ctx));
+                expect(res.error).toBe(true);
+                expect(res.message.toLowerCase()).toContain('must be completed');
+            });
         });
 
         // FINDING 2/3/4: create must run the SAME chain validation as set_chain.
