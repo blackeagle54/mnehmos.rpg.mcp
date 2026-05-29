@@ -862,6 +862,35 @@ function runMigrations(db: Database.Database) {
     db.exec(`ALTER TABLE characters ADD COLUMN skills TEXT;`);
   }
 
+  // PHASE-3: Add achievements column (per-character unlock/progress map, keyed
+  // by achievementId). Guarded ALTER for the same reason as skills above: the
+  // base characters table does not list it, so an unguarded ALTER would throw
+  // 'duplicate column' on a re-run. Nullable for back-compat (defaults-on-read
+  // to {} at the tool layer).
+  const hasAchievements = charColumns.some(col => col.name === 'achievements');
+  if (!hasAchievements) {
+    console.error('[Migration] Adding achievements column to characters table');
+    db.exec(`ALTER TABLE characters ADD COLUMN achievements TEXT;`);
+  }
+
+  // PHASE-3: Achievement catalog (global definitions). Created here (in the
+  // migrations pass, not the base CREATE block) so existing databases gain it on
+  // next boot. `hidden` is 0/1 boolean; `target` is NULL for non-incremental
+  // (binary unlock) achievements.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS achievements(
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL,
+      category TEXT NOT NULL,
+      points INTEGER NOT NULL DEFAULT 0,
+      criteria TEXT,
+      hidden INTEGER NOT NULL DEFAULT 0,
+      target INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_achievements_category ON achievements(category);
+  `);
+
   // PHASE-3: Add skill_requirements column to quests for skill-gated assign.
   // Guarded ALTER for the same reason; defaults to '[]' so existing quests
   // remain ungated.
