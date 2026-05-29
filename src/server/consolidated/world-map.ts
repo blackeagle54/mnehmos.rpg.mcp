@@ -259,7 +259,15 @@ For world creation/management, use world_manage tool instead.`,
 export async function handleWorldMap(args: unknown, ctx: SessionContext): Promise<McpResponse> {
     // Thread the per-request session context explicitly through the router (#14).
     const result = await router(args as Record<string, unknown>, ctx);
-    const parsed = JSON.parse(result.content[0].text);
+
+    // Guard the router-response parse (#14): non-JSON router output should not
+    // throw — fall back to returning the raw response, mirroring handleCombatAction.
+    let parsed: Record<string, any>;
+    try {
+        parsed = JSON.parse(result.content[0].text);
+    } catch {
+        return result;
+    }
 
     {
 
