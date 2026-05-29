@@ -179,8 +179,8 @@ function seedCampaign(db: Database.Database): SeededCampaign {
         name: 'Slay the Dragon',
         description: 'A great wyrm threatens the realm.',
         status: 'active',
-        objectives: [{ id: 'obj1', description: 'Find the lair', required: 1, current: 0, completed: false }],
-        rewards: { xp: 1000, gold: 500, items: [] },
+        objectives: [{ id: 'obj1', description: 'Find the lair', type: 'explore', target: 'dragon_lair', required: 1, current: 0, completed: false }],
+        rewards: { experience: 1000, gold: 500, items: [] },
         prerequisites: [],
         createdAt: now(),
         updatedAt: now(),
@@ -357,6 +357,13 @@ describe('save_manage consolidated tool', () => {
             const seed = seedCampaign(db);
             const before = rowCounts(db);
 
+            // Capture the SOURCE raw JSON columns so we can assert the round-trip
+            // is byte-for-byte (save_manage stores rows verbatim; the character
+            // schema's read-time skill-map normalization is orthogonal).
+            const sourceHeroRow = db
+                .prepare('SELECT skills, reputation FROM characters WHERE id = ?')
+                .get(seed.heroId) as { skills: string | null; reputation: string | null };
+
             const exported = parseResult(
                 await handleSaveManage({ action: 'export', worldId: seed.worldId }, ctx)
             );
@@ -388,8 +395,15 @@ describe('save_manage consolidated tool', () => {
 
             const hero = new CharacterRepository(db).findById(seed.heroId);
             expect(hero?.name).toBe('Aria');
-            expect((hero as any)?.skills).toEqual({ mining: { xp: 1200, rank: 5 } });
-            expect((hero as any)?.reputation).toEqual({ [seed.factionId]: { value: 350 } });
+            // Assert at the RAW column level — save_manage round-trips the stored
+            // JSON columns verbatim, so the restored columns must equal the source
+            // columns byte-for-byte (independent of any read-time normalization).
+            const heroRow = db
+                .prepare('SELECT skills, reputation FROM characters WHERE id = ?')
+                .get(seed.heroId) as { skills: string | null; reputation: string | null };
+            expect(heroRow.skills).toBe(sourceHeroRow.skills);
+            expect(heroRow.reputation).toBe(sourceHeroRow.reputation);
+            expect(JSON.parse(heroRow.reputation!)).toEqual({ [seed.factionId]: { value: 350 } });
 
             const inv = new InventoryRepository(db).getInventory(seed.heroId);
             expect(inv.items.map((i) => i.itemId)).toContain(seed.itemId);

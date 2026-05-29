@@ -1,7 +1,7 @@
 /**
  * Consolidated Tools Index
  *
- * Exports all 31 consolidated tools for the v1.0 clean-break release.
+ * Exports all 32 consolidated tools for the v1.0 clean-break release.
  * Each tool uses action-based routing with fuzzy matching and guiding errors.
  */
 
@@ -52,6 +52,9 @@ export { SessionManageTool, handleSessionManage } from './session-manage.js';
 export { TravelManageTool, handleTravelManage } from './travel-manage.js';
 export { BatchManageTool, handleBatchManage } from './batch-manage.js';
 
+// Batch 7 - Phase 5 Save Files
+export { SaveManageTool, handleSaveManage } from './save-manage.js';
+
 /**
  * Array of all consolidated tool definitions for easy iteration
  */
@@ -86,6 +89,7 @@ import { SpawnManageTool, handleSpawnManage } from './spawn-manage.js';
 import { SessionManageTool, handleSessionManage } from './session-manage.js';
 import { TravelManageTool, handleTravelManage } from './travel-manage.js';
 import { BatchManageTool, handleBatchManage } from './batch-manage.js';
+import { SaveManageTool, handleSaveManage } from './save-manage.js';
 
 export const ConsolidatedTools = [
     { tool: SecretManageTool, handler: handleSecretManage },
@@ -119,4 +123,5 @@ export const ConsolidatedTools = [
     { tool: SessionManageTool, handler: handleSessionManage },
     { tool: TravelManageTool, handler: handleTravelManage },
     { tool: BatchManageTool, handler: handleBatchManage },
+    { tool: SaveManageTool, handler: handleSaveManage },
 ];
