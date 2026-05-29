@@ -7,6 +7,9 @@ import { handleCombatManage, CombatManageTool } from '../../../src/server/consol
 import { clearCombatState } from '../../../src/server/handlers/combat-handlers.js';
 import { getDb } from '../../../src/storage/index.js';
 import { randomUUID } from 'crypto';
+import { readFileSync } from 'fs';
+import { fileURLToPath } from 'url';
+import { dirname, resolve } from 'path';
 
 // Force test mode
 process.env.NODE_ENV = 'test';
@@ -771,6 +774,72 @@ describe('combat_manage consolidated tool', () => {
 
             const text = result.content[0].text;
             expect(text).toContain('<!-- COMBAT_MANAGE_JSON');
+        });
+    });
+
+    // ────────────────────────────────────────────────────────────────────
+    // Issue #14: Remove module-scoped mutable session context
+    // ────────────────────────────────────────────────────────────────────
+    describe('session context isolation', () => {
+        // Isolation regression guard: two concurrent create calls carrying
+        // DISTINCT session contexts must each report their own sessionId and
+        // participants. After threading ctx explicitly through the router, each
+        // call carries its own ctx down its own stack with no shared mutable
+        // holder, so this stays GREEN. (The deterministic RED→GREEN proof for
+        // the threading itself lives in tests/utils/action-router-ctx.test.ts,
+        // where handlers read ctx AFTER a real await — the precise interleave a
+        // module-global holder would corrupt. These combat create handlers
+        // happen to snapshot ctx synchronously, so this acts as a durable
+        // isolation guard rather than the primary RED signal.)
+        it('does not leak session context across concurrent calls', async () => {
+            const ctxA = { sessionId: `sess-A-${randomUUID()}` };
+            const ctxB = { sessionId: `sess-B-${randomUUID()}` };
+
+            const [ra, rb] = await Promise.all([
+                handleCombatManage({
+                    action: 'create',
+                    seed: 'iso-A',
+                    participants: [
+                        { id: 'a1', name: 'Alpha', initiativeBonus: 1, hp: 10, maxHp: 10, isEnemy: false, position: { x: 0, y: 0 } }
+                    ]
+                }, ctxA),
+                handleCombatManage({
+                    action: 'create',
+                    seed: 'iso-B',
+                    participants: [
+                        { id: 'b1', name: 'Bravo', initiativeBonus: 1, hp: 10, maxHp: 10, isEnemy: false, position: { x: 0, y: 0 } }
+                    ]
+                }, ctxB)
+            ]);
+
+            const da = parseResult(ra);
+            const dbResult = parseResult(rb);
+
+            // Each create must report the sessionId of the context it was called with.
+            expect(da.sessionId).toBe(ctxA.sessionId);
+            expect(dbResult.sessionId).toBe(ctxB.sessionId);
+
+            // Participant identity must not cross sessions either.
+            expect(da.participants.map((p: { id: string }) => p.id)).toContain('a1');
+            expect(dbResult.participants.map((p: { id: string }) => p.id)).toContain('b1');
+        });
+
+        // Structural guard: no module-scoped mutable session-context holder may
+        // remain in any of the 5 router-based consolidated tools. This is the
+        // durable backstop if a future refactor weakens the runtime signal above.
+        it('has no module-scoped currentContext holder in router-based tools', () => {
+            const files = [
+                'combat-manage.ts',
+                'combat-action.ts',
+                'combat-map.ts',
+                'world-map.ts',
+                'spatial-manage.ts'
+            ];
+            const baseDir = resolve(dirname(fileURLToPath(import.meta.url)), '../../../src/server/consolidated');
+            for (const f of files) {
+                const src = readFileSync(resolve(baseDir, f), 'utf8');
+                expect(src).not.toMatch(/let\s+currentContext/);
+            }
         });
     });
 });

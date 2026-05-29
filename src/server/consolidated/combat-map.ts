@@ -114,22 +114,19 @@ const GeneratePatternSchema = z.object({
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// CONTEXT HOLDER
-// ═══════════════════════════════════════════════════════════════════════════
-
-let currentContext: SessionContext | null = null;
-
-// ═══════════════════════════════════════════════════════════════════════════
 // ACTION DEFINITIONS
 // ═══════════════════════════════════════════════════════════════════════════
+//
+// Each handler receives the per-request SessionContext explicitly as its 2nd
+// argument (threaded by the router, #14). No module-scoped mutable holder.
 
 const definitions: Record<CombatMapAction, ActionDefinition> = {
     render: {
         schema: RenderSchema,
-        handler: async (params: z.infer<typeof RenderSchema>) => {
-            if (!currentContext) throw new Error('No session context');
+        handler: async (params: z.infer<typeof RenderSchema>, ctx: SessionContext) => {
+            if (!ctx) throw new Error('No session context');
             const { action, ...renderParams } = params;
-            const result = await handleRenderMap(renderParams, currentContext);
+            const result = await handleRenderMap(renderParams, ctx);
             return extractResultData(result, 'render');
         },
         aliases: ['map', 'show_map', 'display', 'view']
@@ -137,10 +134,10 @@ const definitions: Record<CombatMapAction, ActionDefinition> = {
 
     aoe: {
         schema: AoeSchema,
-        handler: async (params: z.infer<typeof AoeSchema>) => {
-            if (!currentContext) throw new Error('No session context');
+        handler: async (params: z.infer<typeof AoeSchema>, ctx: SessionContext) => {
+            if (!ctx) throw new Error('No session context');
             const { action, ...aoeParams } = params;
-            const result = await handleCalculateAoe(aoeParams, currentContext);
+            const result = await handleCalculateAoe(aoeParams, ctx);
             return extractResultData(result, 'aoe');
         },
         aliases: ['calculate_aoe', 'area', 'area_of_effect', 'blast']
@@ -148,10 +145,10 @@ const definitions: Record<CombatMapAction, ActionDefinition> = {
 
     update_terrain: {
         schema: UpdateTerrainSchema,
-        handler: async (params: z.infer<typeof UpdateTerrainSchema>) => {
-            if (!currentContext) throw new Error('No session context');
+        handler: async (params: z.infer<typeof UpdateTerrainSchema>, ctx: SessionContext) => {
+            if (!ctx) throw new Error('No session context');
             const { action, ...terrainParams } = params;
-            const result = await handleUpdateTerrain(terrainParams, currentContext);
+            const result = await handleUpdateTerrain(terrainParams, ctx);
             return extractResultData(result, 'update_terrain');
         },
         aliases: ['terrain', 'modify_terrain', 'add_terrain', 'remove_terrain']
@@ -159,10 +156,10 @@ const definitions: Record<CombatMapAction, ActionDefinition> = {
 
     place_prop: {
         schema: PlacePropSchema,
-        handler: async (params: z.infer<typeof PlacePropSchema>) => {
-            if (!currentContext) throw new Error('No session context');
+        handler: async (params: z.infer<typeof PlacePropSchema>, ctx: SessionContext) => {
+            if (!ctx) throw new Error('No session context');
             const { action, ...propParams } = params;
-            const result = await handlePlaceProp(propParams, currentContext);
+            const result = await handlePlaceProp(propParams, ctx);
             return extractResultData(result, 'place_prop');
         },
         aliases: ['prop', 'add_prop', 'object', 'feature']
@@ -170,10 +167,10 @@ const definitions: Record<CombatMapAction, ActionDefinition> = {
 
     measure: {
         schema: MeasureSchema,
-        handler: async (params: z.infer<typeof MeasureSchema>) => {
-            if (!currentContext) throw new Error('No session context');
+        handler: async (params: z.infer<typeof MeasureSchema>, ctx: SessionContext) => {
+            if (!ctx) throw new Error('No session context');
             const { action, ...measureParams } = params;
-            const result = await handleMeasureDistance(measureParams, currentContext);
+            const result = await handleMeasureDistance(measureParams, ctx);
             return extractResultData(result, 'measure');
         },
         aliases: ['distance', 'measure_distance', 'range', 'how_far']
@@ -181,10 +178,10 @@ const definitions: Record<CombatMapAction, ActionDefinition> = {
 
     generate_patch: {
         schema: GeneratePatchSchema,
-        handler: async (params: z.infer<typeof GeneratePatchSchema>) => {
-            if (!currentContext) throw new Error('No session context');
+        handler: async (params: z.infer<typeof GeneratePatchSchema>, ctx: SessionContext) => {
+            if (!ctx) throw new Error('No session context');
             const { action, ...patchParams } = params;
-            const result = await handleGenerateTerrainPatch(patchParams, currentContext);
+            const result = await handleGenerateTerrainPatch(patchParams, ctx);
             return extractResultData(result, 'generate_patch');
         },
         aliases: ['patch', 'gen_patch', 'biome']
@@ -192,10 +189,10 @@ const definitions: Record<CombatMapAction, ActionDefinition> = {
 
     generate_pattern: {
         schema: GeneratePatternSchema,
-        handler: async (params: z.infer<typeof GeneratePatternSchema>) => {
-            if (!currentContext) throw new Error('No session context');
+        handler: async (params: z.infer<typeof GeneratePatternSchema>, ctx: SessionContext) => {
+            if (!ctx) throw new Error('No session context');
             const { action, ...patternParams } = params;
-            const result = await handleGenerateTerrainPattern(patternParams, currentContext);
+            const result = await handleGenerateTerrainPattern(patternParams, ctx);
             return extractResultData(result, 'generate_pattern');
         },
         aliases: ['pattern', 'gen_pattern', 'maze', 'arena']
@@ -313,11 +310,19 @@ Use combat_action for combat actions (attack, move, cast).`,
 // ═══════════════════════════════════════════════════════════════════════════
 
 export async function handleCombatMap(args: unknown, ctx: SessionContext): Promise<McpResponse> {
-    currentContext = ctx;
+    // Thread the per-request session context explicitly through the router (#14).
+    const result = await router(args as Record<string, unknown>, ctx);
 
+    // Guard the router-response parse (#14): non-JSON router output should not
+    // throw — fall back to returning the raw response, mirroring handleCombatAction.
+    let parsed: Record<string, any>;
     try {
-        const result = await router(args as Record<string, unknown>);
-        const parsed = JSON.parse(result.content[0].text);
+        parsed = JSON.parse(result.content[0].text);
+    } catch {
+        return result;
+    }
+
+    {
 
         let output = '';
 
@@ -386,7 +391,5 @@ export async function handleCombatMap(args: unknown, ctx: SessionContext): Promi
                 text: output
             }]
         };
-    } finally {
-        currentContext = null;
     }
 }

@@ -147,20 +147,17 @@ const GetHistorySchema = z.object({
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// CONTEXT HOLDER (for passing session context to handlers)
-// ═══════════════════════════════════════════════════════════════════════════
-
-let currentContext: SessionContext | null = null;
-
-// ═══════════════════════════════════════════════════════════════════════════
 // ACTION DEFINITIONS
 // ═══════════════════════════════════════════════════════════════════════════
+//
+// Each handler receives the per-request SessionContext explicitly as its 2nd
+// argument (threaded by the router, #14). No module-scoped mutable holder.
 
 const definitions: Record<CombatManageAction, ActionDefinition> = {
     create: {
         schema: CreateSchema,
-        handler: async (params: z.infer<typeof CreateSchema>) => {
-            if (!currentContext) throw new Error('No session context');
+        handler: async (params: z.infer<typeof CreateSchema>, ctx: SessionContext) => {
+            if (!ctx) throw new Error('No session context');
             // Map convenience `side` field down to canonical `isEnemy` and drop `side`
             // before forwarding to handleCreateEncounter (which doesn't accept it).
             const normalizedParticipants = params.participants.map((p) => {
@@ -173,7 +170,7 @@ const definitions: Record<CombatManageAction, ActionDefinition> = {
                 participants: normalizedParticipants,
                 terrain: params.terrain
             };
-            const result = await handleCreateEncounter(originalParams, currentContext);
+            const result = await handleCreateEncounter(originalParams, ctx);
             return extractResultData(result, 'create');
         },
         aliases: ['start', 'new', 'begin', 'init']
@@ -181,9 +178,9 @@ const definitions: Record<CombatManageAction, ActionDefinition> = {
 
     get: {
         schema: GetSchema,
-        handler: async (params: z.infer<typeof GetSchema>) => {
-            if (!currentContext) throw new Error('No session context');
-            const result = await handleGetEncounterState({ encounterId: params.encounterId }, currentContext);
+        handler: async (params: z.infer<typeof GetSchema>, ctx: SessionContext) => {
+            if (!ctx) throw new Error('No session context');
+            const result = await handleGetEncounterState({ encounterId: params.encounterId }, ctx);
             return extractResultData(result, 'get');
         },
         aliases: ['state', 'status', 'show']
@@ -191,9 +188,9 @@ const definitions: Record<CombatManageAction, ActionDefinition> = {
 
     end: {
         schema: EndSchema,
-        handler: async (params: z.infer<typeof EndSchema>) => {
-            if (!currentContext) throw new Error('No session context');
-            const result = await handleEndEncounter({ encounterId: params.encounterId }, currentContext);
+        handler: async (params: z.infer<typeof EndSchema>, ctx: SessionContext) => {
+            if (!ctx) throw new Error('No session context');
+            const result = await handleEndEncounter({ encounterId: params.encounterId }, ctx);
             return extractResultData(result, 'end');
         },
         aliases: ['finish', 'complete', 'stop', 'close']
@@ -201,9 +198,9 @@ const definitions: Record<CombatManageAction, ActionDefinition> = {
 
     load: {
         schema: LoadSchema,
-        handler: async (params: z.infer<typeof LoadSchema>) => {
-            if (!currentContext) throw new Error('No session context');
-            const result = await handleLoadEncounter({ encounterId: params.encounterId }, currentContext);
+        handler: async (params: z.infer<typeof LoadSchema>, ctx: SessionContext) => {
+            if (!ctx) throw new Error('No session context');
+            const result = await handleLoadEncounter({ encounterId: params.encounterId }, ctx);
             return extractResultData(result, 'load');
         },
         aliases: ['restore', 'resume', 'continue']
@@ -211,9 +208,9 @@ const definitions: Record<CombatManageAction, ActionDefinition> = {
 
     advance: {
         schema: AdvanceSchema,
-        handler: async (params: z.infer<typeof AdvanceSchema>) => {
-            if (!currentContext) throw new Error('No session context');
-            const result = await handleAdvanceTurn({ encounterId: params.encounterId }, currentContext);
+        handler: async (params: z.infer<typeof AdvanceSchema>, ctx: SessionContext) => {
+            if (!ctx) throw new Error('No session context');
+            const result = await handleAdvanceTurn({ encounterId: params.encounterId }, ctx);
             return extractResultData(result, 'advance');
         },
         aliases: ['next', 'next_turn', 'advance_turn']
@@ -221,12 +218,12 @@ const definitions: Record<CombatManageAction, ActionDefinition> = {
 
     death_save: {
         schema: DeathSaveSchema,
-        handler: async (params: z.infer<typeof DeathSaveSchema>) => {
-            if (!currentContext) throw new Error('No session context');
+        handler: async (params: z.infer<typeof DeathSaveSchema>, ctx: SessionContext) => {
+            if (!ctx) throw new Error('No session context');
             const result = await handleRollDeathSave({
                 encounterId: params.encounterId,
                 characterId: params.characterId
-            }, currentContext);
+            }, ctx);
             return extractResultData(result, 'death_save');
         },
         aliases: ['death_saving_throw', 'save_death', 'dying']
@@ -234,10 +231,10 @@ const definitions: Record<CombatManageAction, ActionDefinition> = {
 
     lair_action: {
         schema: LairActionSchema,
-        handler: async (params: z.infer<typeof LairActionSchema>) => {
-            if (!currentContext) throw new Error('No session context');
+        handler: async (params: z.infer<typeof LairActionSchema>, ctx: SessionContext) => {
+            if (!ctx) throw new Error('No session context');
             const { action, ...lairParams } = params;
-            const result = await handleExecuteLairAction(lairParams, currentContext);
+            const result = await handleExecuteLairAction(lairParams, ctx);
             return extractResultData(result, 'lair_action');
         },
         aliases: ['lair', 'legendary', 'boss_action']
@@ -245,8 +242,8 @@ const definitions: Record<CombatManageAction, ActionDefinition> = {
 
     spawn_quick_enemy: {
         schema: SpawnQuickEnemySchema,
-        handler: async (params: z.infer<typeof SpawnQuickEnemySchema>) => {
-            if (!currentContext) throw new Error('No session context');
+        handler: async (params: z.infer<typeof SpawnQuickEnemySchema>, ctx: SessionContext) => {
+            if (!ctx) throw new Error('No session context');
 
             // Expand creature template
             const preset = expandCreatureTemplate(params.creature);
@@ -297,7 +294,7 @@ const definitions: Record<CombatManageAction, ActionDefinition> = {
             // sees the spawned enemies. Only falls back to creating a fresh
             // encounter when the id genuinely doesn't exist anywhere.
             if (params.encounterId) {
-                const sessionKey = `${currentContext.sessionId}:${params.encounterId}`;
+                const sessionKey = `${ctx.sessionId}:${params.encounterId}`;
                 let engine = getCombatManager().get(sessionKey);
                 let loadedFromDb = false;
 
@@ -392,7 +389,7 @@ const definitions: Record<CombatManageAction, ActionDefinition> = {
                 terrain: { obstacles: [], difficultTerrain: [], water: [] }
             };
 
-            const result = await handleCreateEncounter(createParams, currentContext);
+            const result = await handleCreateEncounter(createParams, ctx);
             const resultData = extractResultData(result, 'spawn_quick_enemy');
 
             // Enhance with spawn info
@@ -426,7 +423,9 @@ const definitions: Record<CombatManageAction, ActionDefinition> = {
 
     get_history: {
         schema: GetHistorySchema,
-        handler: async (params: z.infer<typeof GetHistorySchema>) => {
+        // get_history reads only from the action-log repo and needs no session
+        // context; the ctx param is named `_ctx` to satisfy noUnusedParameters.
+        handler: async (params: z.infer<typeof GetHistorySchema>, _ctx: SessionContext) => {
             const db = getDb(resolveConsolidatedDbPath());
             const actionLogRepo = new CombatActionLogRepository(db);
 
@@ -559,14 +558,19 @@ For CORPSES after combat, use corpse_manage tool.`,
 // ═══════════════════════════════════════════════════════════════════════════
 
 export async function handleCombatManage(args: unknown, ctx: SessionContext): Promise<McpResponse> {
-    // Store context for handlers
-    currentContext = ctx;
+    // Thread the per-request session context explicitly through the router (#14).
+    const result = await router(args as Record<string, unknown>, ctx);
 
+    // Guard the router-response parse (#14): non-JSON router output should not
+    // throw — fall back to returning the raw response, mirroring handleCombatAction.
+    let parsed: Record<string, any>;
     try {
-        const result = await router(args as Record<string, unknown>);
-        const parsed = JSON.parse(result.content[0].text);
+        parsed = JSON.parse(result.content[0].text);
+    } catch {
+        return result;
+    }
 
-        let output = '';
+    let output = '';
 
         if (parsed.error) {
             output = RichFormatter.header('Error', '❌');
@@ -653,15 +657,12 @@ export async function handleCombatManage(args: unknown, ctx: SessionContext): Pr
             }
         }
 
-        output += RichFormatter.embedJson(parsed, 'COMBAT_MANAGE');
+    output += RichFormatter.embedJson(parsed, 'COMBAT_MANAGE');
 
-        return {
-            content: [{
-                type: 'text' as const,
-                text: output
-            }]
-        };
-    } finally {
-        currentContext = null;
-    }
+    return {
+        content: [{
+            type: 'text' as const,
+            text: output
+        }]
+    };
 }
