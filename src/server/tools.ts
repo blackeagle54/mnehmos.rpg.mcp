@@ -9,6 +9,7 @@ import { getWorldManager } from './state/world-manager.js';
 import { resolveConsolidatedDbPath } from './consolidated/db-path.js';
 import { SessionContext } from './types.js';
 import { WorldRepository } from '../storage/repos/world.repo.js';
+import { PatchRepository } from '../storage/repos/patch.repo.js';
 import { getDb } from '../storage/index.js';
 import * as zlib from 'zlib';
 import { StructureType } from '../schema/structure.js';
@@ -269,6 +270,18 @@ async function getOrRestoreWorld(worldId: string, _sessionId: string) {
     const genTime = Date.now() - startTime;
     console.error(`[WorldGen] World restored in ${genTime}ms`);
 
+    // Replay durable map patches so terrain edits / placed structures survive
+    // eviction and restart — the regenerated world is only the original baseline.
+    // A corrupt stored script must not abort the whole restore, so skip invalid. (#62)
+    const savedScripts = new PatchRepository(db).getScripts(worldId);
+    for (const script of savedScripts) {
+        try {
+            applyPatch(world, parseDSL(script), { skipInvalid: true });
+        } catch (err) {
+            console.error(`[WorldGen] Failed to replay map patch for world ${worldId}:`, err);
+        }
+    }
+
     // Store in memory under the same canonical key.
     manager.create(worldId, world);
     return world;
@@ -319,6 +332,9 @@ export async function handleApplyMapPatch(args: unknown, ctx: SessionContext) {
         if (result.commandsExecuted > 0) {
             const db = getDb(resolveConsolidatedDbPath());
             invalidateTileCache(db, parsed.worldId);
+            // Persist the applied DSL script so the mutation survives eviction/restart
+            // and is replayed when the world is restored from the DB. (#62)
+            new PatchRepository(db).logScript(parsed.worldId, parsed.script);
 
             pubsub?.publish('world', {
                 type: 'patch_applied',
