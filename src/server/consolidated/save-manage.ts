@@ -386,12 +386,35 @@ function upsertRow(db: Database.Database, table: string, pk: string[], row: Row)
         .map((c) => `"${c}" = excluded."${c}"`)
         .join(', ');
 
+    // Does the TABLE itself (per its real schema, not just this row's keys)
+    // declare any column outside the primary key? This distinguishes a genuine
+    // all-PK join table (every column is part of the pk) from an ordinary table
+    // that happens to carry data columns. We use it to tell apart two cases that
+    // both produce an empty `updates` string:
+    //   - a TRUNCATED row (bug): the table HAS data columns but the bundle row
+    //     supplied only its pk, so there is nothing to write back; emitting
+    //     DO NOTHING would silently "succeed" while losing the row's real data.
+    //   - a LEGITIMATE all-PK row: the table has no non-pk columns at all, so a
+    //     conflict genuinely has nothing to update and DO NOTHING is correct
+    //     (emitting `DO UPDATE SET` with no assignments is a SQL syntax error).
+    const hasNonPkColumns = [...tableCols].some((c) => !pkSet.has(c));
+
+    let onConflict: string;
     const conflictTarget = pk.map((c) => `"${c}"`).join(', ');
-    const onConflict = updates
-        ? `ON CONFLICT(${conflictTarget}) DO UPDATE SET ${updates}`
-        : // A row that is ALL primary key (e.g. a pure join row) has nothing to
-          // update — DO NOTHING keeps the upsert idempotent without a no-op SET.
-          `ON CONFLICT(${conflictTarget}) DO NOTHING`;
+    if (hasNonPkColumns && !updates) {
+        // Truncated/malformed bundle row: the table expects data columns but the
+        // row carried only its pk. Reject so the surrounding transaction rolls
+        // the whole import back rather than silently DO NOTHING-succeeding.
+        throw new Error(`Bundle row for table "${table}" is missing all non-primary-key columns`);
+    } else if (!hasNonPkColumns) {
+        // Genuine all-PK join table: nothing to update on conflict. DO NOTHING
+        // keeps the upsert idempotent without an (illegal) empty DO UPDATE SET.
+        // NOTE: no table in the current BUNDLE_TABLES is pure-PK, so this branch
+        // is defensive — it keeps a future all-PK join table safe.
+        onConflict = `ON CONFLICT(${conflictTarget}) DO NOTHING`;
+    } else {
+        onConflict = `ON CONFLICT(${conflictTarget}) DO UPDATE SET ${updates}`;
+    }
 
     db.prepare(`INSERT INTO "${table}" (${colList}) VALUES (${placeholders}) ${onConflict}`).run(row);
 }
@@ -418,6 +441,20 @@ const ImportSchema = z.object({
 
 async function handleExport(args: z.infer<typeof ExportSchema>): Promise<object> {
     const db = ensureDb();
+
+    // Reject an unknown partyId up front. Without this, narrowing to a party that
+    // does not exist in this world silently produces an empty/partial bundle
+    // (zero parties → zero members → zero characters) that LOOKS like a valid
+    // export — a footgun. The world-scoping column on `parties` is `world_id`
+    // (see migrations.ts), so we require the party to exist in THIS world.
+    if (args.partyId) {
+        const partyExists = db
+            .prepare('SELECT 1 FROM parties WHERE world_id = ? AND id = ?')
+            .get(args.worldId, args.partyId);
+        if (!partyExists) {
+            return { error: true, message: `Party ${args.partyId} not found in world ${args.worldId}` };
+        }
+    }
 
     const collected = collectCampaign(db, args.worldId, args.partyId);
     if (!collected) {

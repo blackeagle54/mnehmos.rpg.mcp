@@ -705,6 +705,102 @@ describe('save_manage consolidated tool', () => {
             expect(data.message).toContain('primary key');
             expect(rowCounts(db)).toEqual(before);
         });
+
+        // ── Fix 1 (CodeRabbit): truncated row carrying ONLY its primary key ──
+        // quest_logs has PK (character_id) and real non-PK data columns
+        // (active_quests, completed_quests, failed_quests, chain_choices). A
+        // bundle row that provides ONLY character_id is a truncated/malformed row
+        // for a table that has actual data. The on-conflict path must NOT silently
+        // DO NOTHING-succeed: it must error and roll the whole import back.
+        it('rejects a row that carries only its primary key for a table with data columns', async () => {
+            const seed = seedCampaign(db);
+            const exported = parseResult(
+                await handleSaveManage({ action: 'export', worldId: seed.worldId }, ctx)
+            );
+
+            closeDb();
+            db = getDb(':memory:');
+            const before = rowCounts(db);
+
+            // Truncate the quest_logs row to ONLY its primary key (character_id),
+            // dropping every real data column.
+            const bundle = JSON.parse(JSON.stringify(exported.bundle));
+            expect(bundle.quest_logs.length).toBeGreaterThan(0);
+            const charId = bundle.quest_logs[0].character_id;
+            bundle.quest_logs[0] = { character_id: charId };
+
+            const data = parseResult(
+                await handleSaveManage({ action: 'import', bundle }, ctx)
+            );
+            expect(data.error).toBe(true);
+            expect(data.message).toContain('non-primary-key columns');
+            // The whole import rolled back — DB untouched (no half-write).
+            expect(rowCounts(db)).toEqual(before);
+        });
+
+        // ── Fix 1 (CodeRabbit): a full join-table row must still upsert ──────
+        // party_members uses a surrogate `id` PK plus real data columns, so its
+        // FULL row has non-PK columns and takes the DO UPDATE path. This guards
+        // against the corrected logic accidentally breaking a normal child row
+        // (and confirms a genuine join row imports idempotently, no SQL crash).
+        it('imports a full party_members join row idempotently with no error', async () => {
+            const seed = seedCampaign(db);
+            const exported = parseResult(
+                await handleSaveManage({ action: 'export', worldId: seed.worldId }, ctx)
+            );
+            const expectedCounts = rowCounts(db);
+
+            closeDb();
+            db = getDb(':memory:');
+
+            // Import twice — the join rows must converge (no duplicates, no throw).
+            const first = parseResult(
+                await handleSaveManage({ action: 'import', bundle: exported.bundle }, ctx)
+            );
+            const second = parseResult(
+                await handleSaveManage({ action: 'import', bundle: exported.bundle }, ctx)
+            );
+            expect(first.success).toBe(true);
+            expect(second.success).toBe(true);
+            expect(rowCounts(db).partyMembers).toBe(expectedCounts.partyMembers);
+            expect(rowCounts(db)).toEqual(expectedCounts);
+            // The member's UUID survived verbatim.
+            const member = db
+                .prepare('SELECT * FROM party_members WHERE id = ?')
+                .get(seed.memberId) as { id: string } | undefined;
+            expect(member?.id).toBe(seed.memberId);
+        });
+    });
+
+    describe('export — unknown party rejection', () => {
+        // ── Fix 2 (CodeRabbit): reject an unknown partyId before exporting ──
+        it('errors when partyId does not exist in the world (no silent empty bundle)', async () => {
+            const seed = seedCampaign(db);
+
+            const data = parseResult(
+                await handleSaveManage(
+                    { action: 'export', worldId: seed.worldId, partyId: 'ghost-party' },
+                    ctx
+                )
+            );
+            expect(data.error).toBe(true);
+            expect(data.message).toContain('not found');
+            expect(data.success).toBeUndefined();
+        });
+
+        it('still exports normally for a valid partyId', async () => {
+            const seed = seedCampaign(db);
+
+            const data = parseResult(
+                await handleSaveManage(
+                    { action: 'export', worldId: seed.worldId, partyId: seed.partyId },
+                    ctx
+                )
+            );
+            expect(data.success).toBe(true);
+            expect(data.bundle.parties.map((p: any) => p.id)).toContain(seed.partyId);
+            expect(data.bundle.party_members).toHaveLength(2);
+        });
     });
 
     describe('output formatting', () => {
