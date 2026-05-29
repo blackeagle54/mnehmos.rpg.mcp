@@ -5,6 +5,7 @@
 
 import { handleWorldManage, WorldManageTool } from '../../../src/server/consolidated/world-manage.js';
 import { getDb } from '../../../src/storage/index.js';
+import { WorldRepository } from '../../../src/storage/repos/world.repo.js';
 import { randomUUID } from 'crypto';
 
 process.env.NODE_ENV = 'test';
@@ -231,6 +232,72 @@ describe('world_manage consolidated tool', () => {
 
             const data = parseResult(result);
             expect(data.actionType).toBe('update');
+        });
+
+        // Regression for issue #65: the tool's documented update fields
+        // (dayNightCycle/weather) drifted from the canonical world-environment
+        // fields (timeOfDay/weatherConditions) that readers like session_manage
+        // use, so writes via the documented fields never reached the reader.
+        it('maps deprecated dayNightCycle/weather onto canonical timeOfDay/weatherConditions (#65)', async () => {
+            const createResult = await handleWorldManage({
+                action: 'create', name: 'Drift World', seed: 'drift', width: 20, height: 20
+            }, ctx);
+            const worldId = parseResult(createResult).worldId;
+
+            await handleWorldManage({
+                action: 'update', id: worldId,
+                environment: { dayNightCycle: 'night', weather: 'storm' }
+            }, ctx);
+
+            const got = parseResult(await handleWorldManage({ action: 'get', id: worldId }, ctx));
+            expect(got.world.environment.timeOfDay).toBe('night');
+            expect(got.world.environment.weatherConditions).toBe('storm');
+        });
+
+        it('accepts canonical timeOfDay/weatherConditions directly (#65)', async () => {
+            const createResult = await handleWorldManage({
+                action: 'create', name: 'Canon World', seed: 'canon', width: 20, height: 20
+            }, ctx);
+            const worldId = parseResult(createResult).worldId;
+
+            await handleWorldManage({
+                action: 'update', id: worldId,
+                environment: { timeOfDay: 'dusk', weatherConditions: 'rain' }
+            }, ctx);
+
+            const got = parseResult(await handleWorldManage({ action: 'get', id: worldId }, ctx));
+            expect(got.world.environment.timeOfDay).toBe('dusk');
+            expect(got.world.environment.weatherConditions).toBe('rain');
+        });
+
+        // CodeRabbit (PR #28): updateEnvironment shallow-merges, so a deprecated
+        // alias already persisted on a legacy world is not removed merely by
+        // omitting it from the patch. A canonical update must converge — clear it.
+        it('clears deprecated alias keys already persisted on a legacy world (#65)', async () => {
+            const db = getDb(':memory:');
+            const readRawEnv = (id: string) =>
+                JSON.parse((db.prepare('SELECT environment FROM worlds WHERE id = ?').get(id) as { environment: string }).environment);
+
+            const createResult = await handleWorldManage({
+                action: 'create', name: 'Legacy World', seed: 'legacy', width: 20, height: 20
+            }, ctx);
+            const worldId = parseResult(createResult).worldId;
+
+            // Simulate a record written before canonicalization (raw alias persisted),
+            // and assert the legacy write actually took effect in raw storage.
+            new WorldRepository(db).updateEnvironment(worldId, { dayNightCycle: 'night' });
+            expect(readRawEnv(worldId).dayNightCycle).toBe('night');
+
+            await handleWorldManage({
+                action: 'update', id: worldId,
+                environment: { weatherConditions: 'clear' }
+            }, ctx);
+
+            // Assert against the RAW stored JSON (not the get handler's output): the
+            // canonical update must have removed the persisted legacy alias.
+            const rawAfter = readRawEnv(worldId);
+            expect(rawAfter.dayNightCycle).toBeUndefined();
+            expect(rawAfter.weatherConditions).toBe('clear');
         });
     });
 
