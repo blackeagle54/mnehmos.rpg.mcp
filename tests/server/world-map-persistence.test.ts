@@ -43,6 +43,9 @@ describe('world_map patch persistence across eviction (issue #62)', () => {
 
         // Pick a terrain-valid coordinate for a city (deterministic for this seed).
         const poi = parseMap(await handleWorldMap({ action: 'find_poi', worldId, poiType: 'city', count: 1 }, ctx));
+        // Assert a candidate exists before destructuring so a placement failure
+        // surfaces here rather than as an opaque "Cannot destructure" error.
+        expect(poi.candidates?.length ?? 0).toBeGreaterThan(0);
         const { x, y } = poi.candidates[0];
 
         const patch = parseMap(await handleWorldMap({
