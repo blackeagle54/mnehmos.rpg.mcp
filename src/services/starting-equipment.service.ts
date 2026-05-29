@@ -29,7 +29,7 @@ export interface ProvisioningResult {
     spellsGranted: string[];
     cantripsGranted: string[];
     spellSlots: number[] | null;
-    pactMagicSlots: { slots: number; level: number } | null;
+    pactMagicSlots: { current: number; max: number; slotLevel: number } | null;
     startingGold: number;
     errors: string[];
 }
@@ -118,7 +118,10 @@ export function provisionStartingEquipment(
                 // Find the non-zero slot count and its spell level (1-indexed)
                 const slotCount = slots.find(s => s > 0) || 1;
                 const slotLevel = slots.findIndex(s => s > 0) + 1;
-                result.pactMagicSlots = { slots: slotCount, level: slotLevel || 1 };
+                // Emit the canonical PactMagicSlotsSchema shape { current, max, slotLevel }
+                // that CharacterSchema and every consumer (rest-manage, spell-validator)
+                // expect. A fresh, fully-rested character has current === max. (#33)
+                result.pactMagicSlots = { current: slotCount, max: slotCount, slotLevel: slotLevel || 1 };
             } else {
                 result.spellSlots = slots as number[];
             }
