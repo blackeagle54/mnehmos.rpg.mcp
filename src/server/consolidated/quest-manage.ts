@@ -19,14 +19,25 @@ import { ItemRepository } from '../../storage/repos/item.repo.js';
 import { ToolContract } from '../tool-metadata.js';
 import { SkillNameSchema } from '../../schema/skill.js';
 import { levelFromXp } from '../../math/skill-xp.js';
+import type { Quest } from '../../schema/quest.js';
+import type { Character } from '../../schema/character.js';
 // Quest types from schema: kill, collect, deliver, explore, interact, custom
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════════════
 
-const ACTIONS = ['create', 'get', 'list', 'assign', 'update_objective', 'complete_objective', 'complete', 'get_log'] as const;
+const ACTIONS = ['create', 'get', 'list', 'assign', 'update_objective', 'complete_objective', 'complete', 'get_log', 'set_chain', 'get_chain', 'list_chains', 'select_branch'] as const;
 type QuestManageAction = typeof ACTIONS[number];
+
+// Shared shape for a chain branch edge (player-choice path).
+const ChainBranchSchema = z.object({
+    choiceId: z.string().describe('Stable id for this branch choice'),
+    label: z.string().describe('Human-readable label for the choice'),
+    questId: z.string().describe('Quest unlocked when this branch is chosen')
+});
+
+type UnlockState = 'locked' | 'available' | 'active' | 'completed';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // DATABASE HELPER
@@ -73,6 +84,12 @@ const CreateSchema = z.object({
         skill: SkillNameSchema,
         level: z.number().int().min(1).max(99)
     })).default([]).describe('Required minimum skill levels checked on assign'),
+    chain: z.object({
+        chainId: z.string().optional(),
+        order: z.number().int().min(0).optional(),
+        nextQuests: z.array(z.string()).default([]),
+        branches: z.array(ChainBranchSchema).default([])
+    }).default({ nextQuests: [], branches: [] }).describe('Quest-chain graph metadata'),
     status: z.enum(['available', 'active', 'completed', 'failed']).default('available')
 });
 
@@ -117,6 +134,117 @@ const GetLogSchema = z.object({
     characterId: z.string().describe('Character ID')
 });
 
+const SetChainSchema = z.object({
+    action: z.literal('set_chain'),
+    questId: z.string().describe('Quest ID whose chain metadata is being set'),
+    chainId: z.string().optional().describe('Storyline grouping id'),
+    order: z.number().int().min(0).optional().describe('Position in a linear chain'),
+    nextQuests: z.array(z.string()).default([]).describe('Quest IDs auto-unlocked when this quest completes'),
+    branches: z.array(ChainBranchSchema).default([]).describe('Branching player-choice paths')
+});
+
+const GetChainSchema = z.object({
+    action: z.literal('get_chain'),
+    chainId: z.string().optional().describe('Chain ID to read'),
+    questId: z.string().optional().describe('Any quest ID in the chain (resolves its chainId)'),
+    characterId: z.string().optional().describe('Character to derive per-character unlock state for')
+}).refine(a => a.chainId !== undefined || a.questId !== undefined, {
+    message: 'get_chain requires either chainId or questId'
+});
+
+const ListChainsSchema = z.object({
+    action: z.literal('list_chains'),
+    worldId: z.string().optional().describe('Filter by world ID')
+});
+
+const SelectBranchSchema = z.object({
+    action: z.literal('select_branch'),
+    characterId: z.string().describe('Character ID making the choice'),
+    chainId: z.string().describe('Chain ID the branch belongs to'),
+    choiceId: z.string().describe('The branch choiceId to select')
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GATING HELPERS (shared by assign / complete auto-unlock / get_chain)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * SINGLE SOURCE OF TRUTH for "can this quest be assigned right now?".
+ *
+ * Returns null when the gate passes, or a human-readable reason string when it
+ * is blocked. Mirrors the prerequisite + skillRequirements checks that
+ * handleAssign enforces so that chain auto-unlock and get_chain's unlockState
+ * can NEVER bypass the Phase-3 skill gate. Skill level is always DERIVED from
+ * the character's stored XP via the curve — never a client-supplied level.
+ */
+function questGateReason(
+    quest: Quest,
+    character: Character,
+    completedQuestIds: string[]
+): string | null {
+    for (const prereqId of quest.prerequisites) {
+        if (!completedQuestIds.includes(prereqId)) {
+            return `prerequisite ${prereqId} not completed`;
+        }
+    }
+    for (const req of quest.skillRequirements) {
+        const entry = character.skills?.[req.skill];
+        const currentLevel = entry ? levelFromXp(entry.xp) : 1;
+        if (currentLevel < req.level) {
+            return `requires ${req.skill} level ${req.level} (have ${currentLevel})`;
+        }
+    }
+    return null;
+}
+
+/**
+ * Find whether `quest` is a branch target of some OTHER quest. Returns the
+ * owning source's { chainId, choiceId } so callers can check the character's
+ * recorded branch choice. A quest reachable only via a player branch is gated
+ * behind that choice (in addition to its own prerequisites/skill gates).
+ *
+ * The branch-source quest must carry a chainId (set_chain validates the edge),
+ * which scopes the recorded choice to that chain. The TARGET quest does NOT
+ * need its own chainId — a branch target is gated purely by being referenced.
+ */
+function findBranchGate(
+    questRepo: QuestRepository,
+    quest: Quest
+): { chainId: string; choiceId: string } | null {
+    for (const candidate of questRepo.findAll()) {
+        const sourceChainId = candidate.chain.chainId;
+        if (sourceChainId === undefined) continue; // a chainless source has no recorded-choice scope
+        const match = candidate.chain.branches.find(b => b.questId === quest.id);
+        if (match) return { chainId: sourceChainId, choiceId: match.choiceId };
+    }
+    return null;
+}
+
+/**
+ * Derive the per-character unlockState for a quest from STORED data only:
+ *  - completed: in the character's completedQuests
+ *  - active:    in the character's activeQuests
+ *  - available: gate (prereqs + skill + branch choice) passes
+ *  - locked:    gate fails
+ */
+function deriveUnlockState(
+    questRepo: QuestRepository,
+    quest: Quest,
+    character: Character,
+    log: { activeQuests: string[]; completedQuests: string[]; chainChoices: Record<string, string> }
+): UnlockState {
+    if (log.completedQuests.includes(quest.id)) return 'completed';
+    if (log.activeQuests.includes(quest.id)) return 'active';
+    if (questGateReason(quest, character, log.completedQuests) !== null) return 'locked';
+    // Branch gate: an unchosen branch target stays locked even when its
+    // prerequisites pass.
+    const branchGate = findBranchGate(questRepo, quest);
+    if (branchGate && log.chainChoices[branchGate.chainId] !== branchGate.choiceId) {
+        return 'locked';
+    }
+    return 'available';
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // ACTION HANDLERS
 // ═══════════════════════════════════════════════════════════════════════════
@@ -144,6 +272,7 @@ async function handleCreate(args: z.infer<typeof CreateSchema>): Promise<object>
         rewards: args.rewards,
         prerequisites: args.prerequisites,
         skillRequirements: args.skillRequirements,
+        chain: args.chain,
         status: args.status,
         createdAt: now,
         updatedAt: now
@@ -184,7 +313,10 @@ async function handleGet(args: z.infer<typeof GetSchema>): Promise<object> {
             prerequisites: quest.prerequisites,
             // create persists skillRequirements; return them here so a
             // create→get round-trip preserves the skill gates.
-            skillRequirements: quest.skillRequirements
+            skillRequirements: quest.skillRequirements,
+            // create/set_chain persist chain metadata; return it so a
+            // create→set_chain→get round-trip preserves the chain graph.
+            chain: quest.chain
         }
     };
 }
@@ -226,7 +358,8 @@ async function handleAssign(args: z.infer<typeof AssignSchema>): Promise<object>
             characterId: args.characterId,
             activeQuests: [],
             completedQuests: [],
-            failedQuests: []
+            failedQuests: [],
+            chainChoices: {}
         };
     }
 
@@ -256,6 +389,22 @@ async function handleAssign(args: z.infer<typeof AssignSchema>): Promise<object>
             return {
                 error: true,
                 message: `Requires ${req.skill} level ${req.level} (you have ${currentLevel})`
+            };
+        }
+    }
+
+    // PHASE-3: Branch gate. If this quest is a branch target of any quest in its
+    // chain, it is only assignable to a character who SELECTED that branch.
+    // Prevents both branches of a fork from being startable just because they
+    // share the source quest as a prerequisite. Locked branches stay locked
+    // until select_branch records the choice.
+    const branchGate = findBranchGate(questRepo, quest);
+    if (branchGate) {
+        const chosen = log.chainChoices[branchGate.chainId];
+        if (chosen !== branchGate.choiceId) {
+            return {
+                error: true,
+                message: `Quest "${quest.name}" is a locked branch — choose it via select_branch first`
             };
         }
     }
@@ -421,6 +570,28 @@ async function handleComplete(args: z.infer<typeof CompleteSchema>): Promise<obj
     // Update quest status
     questRepo.update(args.questId, { status: 'completed' });
 
+    // PHASE-3: Quest-chain auto-unlock. With this quest now in completedQuests,
+    // any chain.nextQuests whose prerequisites + skill gates now pass become
+    // assignable (lock-ness is DERIVED, so there is no status write — we report
+    // which quests transitioned locked→available). The gate is re-checked here
+    // so chains can NEVER bypass the Phase-3 skill gate.
+    const unlockedNext: string[] = [];
+    for (const nextId of quest.chain.nextQuests) {
+        // Skip self/already-progressed quests.
+        if (nextId === args.questId) continue;
+        if (log.completedQuests.includes(nextId) || log.activeQuests.includes(nextId)) continue;
+        const nextQuest = questRepo.findById(nextId);
+        if (!nextQuest) continue; // dangling edge (target deleted) — skip, don't crash
+        // Branch targets are NOT auto-unlocked; the player must choose them.
+        if (findBranchGate(questRepo, nextQuest)) continue;
+        if (questGateReason(nextQuest, character, log.completedQuests) === null) {
+            unlockedNext.push(nextId);
+        }
+    }
+
+    // PHASE-3: Branches are offered for the player to choose (NOT auto-unlocked).
+    const unlockedBranches = quest.chain.branches;
+
     return {
         success: true,
         actionType: 'complete',
@@ -429,6 +600,8 @@ async function handleComplete(args: z.infer<typeof CompleteSchema>): Promise<obj
         characterId: args.characterId,
         characterName: character.name,
         rewards: rewardsGranted,
+        unlockedNext,
+        unlockedBranches,
         message: `${character.name} completed "${quest.name}"! Rewards: ${rewardsGranted.xp} XP, ${rewardsGranted.gold} gold`
     };
 }
@@ -467,6 +640,233 @@ async function handleGetLog(args: z.infer<typeof GetLogSchema>): Promise<object>
         characterName: character.name,
         summary: fullLog.summary,
         quests
+    };
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// PHASE-3: QUEST CHAIN ACTIONS
+// ───────────────────────────────────────────────────────────────────────────
+
+async function handleSetChain(args: z.infer<typeof SetChainSchema>): Promise<object> {
+    const { questRepo } = ensureDb();
+
+    const quest = questRepo.findById(args.questId);
+    if (!quest) {
+        return { error: true, message: `Quest ${args.questId} not found` };
+    }
+
+    const nextQuests = args.nextQuests ?? [];
+    const branches = args.branches ?? [];
+
+    // Reject self-reference: a quest may not unlock itself (would dead-lock /
+    // loop on completion).
+    if (nextQuests.includes(args.questId)) {
+        return { error: true, message: `Quest cannot reference itself in nextQuests` };
+    }
+    if (branches.some(b => b.questId === args.questId)) {
+        return { error: true, message: `Quest cannot reference itself in a branch` };
+    }
+
+    // Reject duplicate branch choiceIds (ambiguous select_branch target).
+    const seenChoices = new Set<string>();
+    for (const b of branches) {
+        if (seenChoices.has(b.choiceId)) {
+            return { error: true, message: `Duplicate branch choiceId "${b.choiceId}"` };
+        }
+        seenChoices.add(b.choiceId);
+    }
+
+    // Validate every referenced quest ID exists (no dangling graph edges).
+    const referenced = [...nextQuests, ...branches.map(b => b.questId)];
+    for (const refId of referenced) {
+        if (!questRepo.findById(refId)) {
+            return { error: true, message: `Referenced quest ${refId} does not exist` };
+        }
+    }
+
+    const chain = {
+        chainId: args.chainId,
+        order: args.order,
+        nextQuests,
+        branches
+    };
+
+    const updated = questRepo.update(args.questId, { chain });
+    if (!updated) {
+        // TOCTOU: quest deleted between findById and update.
+        return { error: true, message: `Quest ${args.questId} not found` };
+    }
+
+    return {
+        success: true,
+        actionType: 'set_chain',
+        questId: args.questId,
+        chain: updated.chain
+    };
+}
+
+/**
+ * Resolve the set of quests in a chain. Lookup is by chainId, or by a questId
+ * whose stored chain.chainId names the chain. Quests lacking a chainId can
+ * still be looked up directly by their own id (singleton chain).
+ */
+function resolveChainQuests(
+    questRepo: QuestRepository,
+    opts: { chainId?: string; questId?: string }
+): { chainId: string | undefined; quests: Quest[] } | null {
+    let chainId = opts.chainId;
+    if (chainId === undefined && opts.questId) {
+        const seed = questRepo.findById(opts.questId);
+        if (!seed) return null;
+        chainId = seed.chain.chainId;
+        if (chainId === undefined) {
+            // No chainId on the seed quest — treat it as a singleton chain.
+            return { chainId: undefined, quests: [seed] };
+        }
+    }
+    if (chainId === undefined) return null;
+    const all = questRepo.findAll();
+    const quests = all.filter(q => q.chain.chainId === chainId);
+    return { chainId, quests };
+}
+
+async function handleGetChain(args: z.infer<typeof GetChainSchema>): Promise<object> {
+    const { questRepo, characterRepo } = ensureDb();
+
+    const resolved = resolveChainQuests(questRepo, { chainId: args.chainId, questId: args.questId });
+    if (!resolved || resolved.quests.length === 0) {
+        return { error: true, message: `No chain found for ${args.chainId ?? args.questId}` };
+    }
+
+    // Per-character unlock state derivation (optional characterId).
+    let character: Character | null = null;
+    let log: { activeQuests: string[]; completedQuests: string[]; chainChoices: Record<string, string> } = {
+        activeQuests: [], completedQuests: [], chainChoices: {}
+    };
+    if (args.characterId) {
+        character = characterRepo.findById(args.characterId);
+        if (!character) {
+            return { error: true, message: `Character ${args.characterId} not found` };
+        }
+        const found = questRepo.getLog(args.characterId);
+        if (found) {
+            log = { activeQuests: found.activeQuests, completedQuests: found.completedQuests, chainChoices: found.chainChoices };
+        }
+    }
+
+    // Sort by chain.order (undefined orders sink to the end, preserving stable order otherwise).
+    const sorted = [...resolved.quests].sort((a, b) => {
+        const ao = a.chain.order ?? Number.MAX_SAFE_INTEGER;
+        const bo = b.chain.order ?? Number.MAX_SAFE_INTEGER;
+        return ao - bo;
+    });
+
+    const quests = sorted.map(q => ({
+        id: q.id,
+        name: q.name,
+        order: q.chain.order,
+        status: q.status,
+        // unlockState is DERIVED, never trusted from the caller.
+        unlockState: character ? deriveUnlockState(questRepo, q, character, log) : 'locked' as UnlockState,
+        prerequisites: q.prerequisites,
+        skillRequirements: q.skillRequirements,
+        nextQuests: q.chain.nextQuests,
+        branches: q.chain.branches
+    }));
+
+    return {
+        success: true,
+        actionType: 'get_chain',
+        chainId: resolved.chainId,
+        characterId: args.characterId,
+        chainChoices: log.chainChoices,
+        quests
+    };
+}
+
+async function handleListChains(args: z.infer<typeof ListChainsSchema>): Promise<object> {
+    const { questRepo } = ensureDb();
+    const quests = questRepo.findAll(args.worldId);
+
+    const groups = new Map<string, { chainId: string; questCount: number; completedCount: number }>();
+    for (const q of quests) {
+        const cid = q.chain.chainId;
+        if (cid === undefined) continue; // ungrouped quests are not part of any named chain
+        let g = groups.get(cid);
+        if (!g) {
+            g = { chainId: cid, questCount: 0, completedCount: 0 };
+            groups.set(cid, g);
+        }
+        g.questCount += 1;
+        if (q.status === 'completed') g.completedCount += 1;
+    }
+
+    return {
+        success: true,
+        actionType: 'list_chains',
+        count: groups.size,
+        chains: [...groups.values()]
+    };
+}
+
+async function handleSelectBranch(args: z.infer<typeof SelectBranchSchema>): Promise<object> {
+    const { questRepo, characterRepo } = ensureDb();
+
+    const character = characterRepo.findById(args.characterId);
+    if (!character) {
+        return { error: true, message: `Character ${args.characterId} not found` };
+    }
+
+    // Find the source quest in this chain that owns the branch (a completed
+    // quest whose chain.branches contains the choiceId).
+    const chainQuests = questRepo.findAll().filter(q => q.chain.chainId === args.chainId);
+    if (chainQuests.length === 0) {
+        return { error: true, message: `No chain found for ${args.chainId}` };
+    }
+
+    let branch: { choiceId: string; label: string; questId: string } | undefined;
+    let sourceQuest: Quest | undefined;
+    for (const q of chainQuests) {
+        const match = q.chain.branches.find(b => b.choiceId === args.choiceId);
+        if (match) {
+            branch = match;
+            sourceQuest = q;
+            break;
+        }
+    }
+
+    if (!branch || !sourceQuest) {
+        return { error: true, message: `Branch choice "${args.choiceId}" not found in chain ${args.chainId}` };
+    }
+
+    // The branch's source quest must have been completed by this character
+    // before its branches can be chosen.
+    const log = questRepo.getLog(args.characterId);
+    if (!log || !log.completedQuests.includes(sourceQuest.id)) {
+        return { error: true, message: `Quest "${sourceQuest.name}" must be completed before selecting a branch` };
+    }
+
+    // Confirm the chosen branch's target quest still exists.
+    const target = questRepo.findById(branch.questId);
+    if (!target) {
+        return { error: true, message: `Branch target quest ${branch.questId} no longer exists` };
+    }
+
+    // Record the choice. The chosen branch's questId becomes assignable purely
+    // because the chosen path's prerequisites (typically the source quest) are
+    // now satisfied; the OTHER branches stay gated since they are not chosen and
+    // their assign path will still see the choice recorded here.
+    log.chainChoices[args.chainId] = args.choiceId;
+    questRepo.updateLog(log);
+
+    return {
+        success: true,
+        actionType: 'select_branch',
+        characterId: args.characterId,
+        chainId: args.chainId,
+        choiceId: args.choiceId,
+        chosenQuestId: branch.questId,
+        message: `Chose "${branch.label}" — unlocked "${target.name}"`
     };
 }
 
@@ -522,6 +922,30 @@ const definitions: Record<QuestManageAction, ActionDefinition> = {
         handler: handleGetLog,
         aliases: ['log', 'journal'],
         description: 'Get character quest log'
+    },
+    set_chain: {
+        schema: SetChainSchema,
+        handler: handleSetChain,
+        aliases: ['link_chain', 'chain'],
+        description: 'Set quest-chain links (nextQuests / branches) on a quest'
+    },
+    get_chain: {
+        schema: GetChainSchema,
+        handler: handleGetChain,
+        aliases: ['chain_graph', 'view_chain'],
+        description: 'Read a chain graph with per-character unlock state'
+    },
+    list_chains: {
+        schema: ListChainsSchema,
+        handler: handleListChains,
+        aliases: ['chains'],
+        description: 'List all quest chains grouped by chainId'
+    },
+    select_branch: {
+        schema: SelectBranchSchema,
+        handler: handleSelectBranch,
+        aliases: ['choose_branch', 'pick_branch'],
+        description: 'Record a branch choice and unlock only the chosen path'
     }
 };
 
@@ -540,9 +964,15 @@ export const QuestManageTool = {
     category: 'quest',
     keywords: ['quest', 'objective', 'assign', 'complete', 'reward'],
     capabilities: ['Quest lifecycle', 'Objectives', 'Rewards'],
-    description: `Manage RPG quests - creation, assignment, progress, and completion.
-Actions: create, get, list, assign, update_objective, complete_objective, complete, get_log
+    description: `Manage RPG quests - creation, assignment, progress, completion, and chains.
+Actions: create, get, list, assign, update_objective, complete_objective, complete, get_log, set_chain, get_chain, list_chains, select_branch
 Aliases: new→create, accept→assign, progress→update_objective, finish→complete, log→get_log
+
+🔗 QUEST CHAINS (Phase-3):
+- set_chain - Link a quest to nextQuests (auto-unlocked on complete) and/or branches (player-choice paths)
+- get_chain - View a chain graph with per-character unlock state (locked/available/active/completed)
+- list_chains - List all chains grouped by chainId
+- select_branch - Record a branch choice; unlocks ONLY the chosen path
 
 📜 QUEST WORKFLOW:
 1. create - Define a quest with objectives and rewards
@@ -574,7 +1004,13 @@ Each objective requires a "type" field. Valid values:
         prerequisites: z.array(z.string()).optional(),
         skillRequirements: z.array(z.any()).optional().describe('Skill gates: [{ skill, level }] checked on assign'),
         status: z.string().optional(),
-        progress: z.number().optional().describe('Progress increment')
+        progress: z.number().optional().describe('Progress increment'),
+        // PHASE-3: quest-chain fields (for set_chain / get_chain / list_chains / select_branch)
+        chainId: z.string().optional().describe('Chain (storyline) id'),
+        order: z.number().optional().describe('Position in a linear chain (set_chain)'),
+        nextQuests: z.array(z.string()).optional().describe('Quest IDs auto-unlocked on complete (set_chain)'),
+        branches: z.array(z.any()).optional().describe('Branching paths: [{ choiceId, label, questId }] (set_chain)'),
+        choiceId: z.string().optional().describe('Branch choice id (select_branch)')
     })
 } satisfies ToolContract;
 
@@ -690,6 +1126,47 @@ export async function handleQuestManage(args: unknown, _ctx: SessionContext): Pr
                         output += `${icon} **${q.name}** (${q.status})\n`;
                     });
                 }
+                break;
+            case 'set_chain':
+                output = RichFormatter.header('Quest Chain Set', '🔗');
+                output += RichFormatter.keyValue({
+                    'Quest': `\`${parsed.questId}\``,
+                    'Chain': parsed.chain?.chainId || '(none)',
+                    'Next': (parsed.chain?.nextQuests || []).length,
+                    'Branches': (parsed.chain?.branches || []).length
+                });
+                break;
+            case 'get_chain':
+                output = RichFormatter.header(`Quest Chain${parsed.chainId ? `: ${parsed.chainId}` : ''}`, '🔗');
+                if (parsed.quests?.length > 0) {
+                    parsed.quests.forEach((q: { name: string; unlockState: string }) => {
+                        const icon = q.unlockState === 'completed' ? '✅'
+                            : q.unlockState === 'active' ? '⚔️'
+                            : q.unlockState === 'available' ? '🟢' : '🔒';
+                        output += `${icon} **${q.name}** (${q.unlockState})\n`;
+                    });
+                } else {
+                    output += 'No quests in this chain.\n';
+                }
+                break;
+            case 'list_chains':
+                output = RichFormatter.header(`Quest Chains (${parsed.count})`, '🔗');
+                if (parsed.chains?.length > 0) {
+                    parsed.chains.forEach((c: { chainId: string; questCount: number; completedCount: number }) => {
+                        output += `• **${c.chainId}** — ${c.completedCount}/${c.questCount} complete\n`;
+                    });
+                } else {
+                    output += 'No chains found.\n';
+                }
+                break;
+            case 'select_branch':
+                output = RichFormatter.header('Branch Chosen', '🔀');
+                output += RichFormatter.keyValue({
+                    'Chain': parsed.chainId,
+                    'Choice': parsed.choiceId,
+                    'Unlocked': `\`${parsed.chosenQuestId}\``
+                });
+                if (parsed.message) output += RichFormatter.success(parsed.message);
                 break;
             default:
                 output = RichFormatter.header('Quest', '📜');

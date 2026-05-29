@@ -23,8 +23,8 @@ export class QuestRepository {
         const validQuest = QuestSchema.parse(quest);
 
         const stmt = this.db.prepare(`
-            INSERT INTO quests (id, world_id, name, description, status, objectives, rewards, prerequisites, skill_requirements, giver, created_at, updated_at)
-            VALUES (@id, @worldId, @name, @description, @status, @objectives, @rewards, @prerequisites, @skillRequirements, @giver, @createdAt, @updatedAt)
+            INSERT INTO quests (id, world_id, name, description, status, objectives, rewards, prerequisites, skill_requirements, chain, giver, created_at, updated_at)
+            VALUES (@id, @worldId, @name, @description, @status, @objectives, @rewards, @prerequisites, @skillRequirements, @chain, @giver, @createdAt, @updatedAt)
         `);
 
         stmt.run({
@@ -37,6 +37,7 @@ export class QuestRepository {
             rewards: JSON.stringify(validQuest.rewards),
             prerequisites: JSON.stringify(validQuest.prerequisites),
             skillRequirements: JSON.stringify(validQuest.skillRequirements),
+            chain: JSON.stringify(validQuest.chain),
             giver: validQuest.giver || null,
             createdAt: validQuest.createdAt,
             updatedAt: validQuest.updatedAt
@@ -65,7 +66,7 @@ export class QuestRepository {
 
         const stmt = this.db.prepare(`
             UPDATE quests
-            SET name = ?, description = ?, status = ?, objectives = ?, rewards = ?, prerequisites = ?, skill_requirements = ?, giver = ?, updated_at = ?
+            SET name = ?, description = ?, status = ?, objectives = ?, rewards = ?, prerequisites = ?, skill_requirements = ?, chain = ?, giver = ?, updated_at = ?
             WHERE id = ?
         `);
 
@@ -77,6 +78,7 @@ export class QuestRepository {
             JSON.stringify(validQuest.rewards),
             JSON.stringify(validQuest.prerequisites),
             JSON.stringify(validQuest.skillRequirements),
+            JSON.stringify(validQuest.chain),
             validQuest.giver || null,
             validQuest.updatedAt,
             id
@@ -221,19 +223,21 @@ export class QuestRepository {
         const validLog = QuestLogSchema.parse(log);
 
         const stmt = this.db.prepare(`
-            INSERT INTO quest_logs (character_id, active_quests, completed_quests, failed_quests)
-            VALUES (@characterId, @activeQuests, @completedQuests, @failedQuests)
+            INSERT INTO quest_logs (character_id, active_quests, completed_quests, failed_quests, chain_choices)
+            VALUES (@characterId, @activeQuests, @completedQuests, @failedQuests, @chainChoices)
             ON CONFLICT(character_id) DO UPDATE SET
                 active_quests = excluded.active_quests,
                 completed_quests = excluded.completed_quests,
-                failed_quests = excluded.failed_quests
+                failed_quests = excluded.failed_quests,
+                chain_choices = excluded.chain_choices
         `);
 
         stmt.run({
             characterId: validLog.characterId,
             activeQuests: JSON.stringify(validLog.activeQuests),
             completedQuests: JSON.stringify(validLog.completedQuests),
-            failedQuests: JSON.stringify(validLog.failedQuests)
+            failedQuests: JSON.stringify(validLog.failedQuests),
+            chainChoices: JSON.stringify(validLog.chainChoices)
         });
     }
 
@@ -249,6 +253,10 @@ export class QuestRepository {
             prerequisites: JSON.parse(row.prerequisites),
             // PHASE-3: skill gates — default to [] for legacy quests (back-compat)
             skillRequirements: row.skill_requirements ? JSON.parse(row.skill_requirements) : [],
+            // PHASE-3: chain graph — default to the empty shape for legacy quests
+            // (back-compat). Stored as '{}' which parses to {} then the schema
+            // default fills nextQuests/branches.
+            chain: row.chain ? JSON.parse(row.chain) : { nextQuests: [], branches: [] },
             giver: row.giver || undefined,
             createdAt: row.created_at,
             updatedAt: row.updated_at
@@ -260,7 +268,9 @@ export class QuestRepository {
             characterId: row.character_id,
             activeQuests: JSON.parse(row.active_quests),
             completedQuests: JSON.parse(row.completed_quests),
-            failedQuests: JSON.parse(row.failed_quests)
+            failedQuests: JSON.parse(row.failed_quests),
+            // PHASE-3: branch choices — default to {} for legacy logs (back-compat)
+            chainChoices: row.chain_choices ? JSON.parse(row.chain_choices) : {}
         });
     }
 }
@@ -275,6 +285,7 @@ interface QuestRow {
     rewards: string;
     prerequisites: string;
     skill_requirements?: string | null;
+    chain?: string | null;
     giver: string | null;
     created_at: string;
     updated_at: string;
@@ -285,4 +296,5 @@ interface QuestLogRow {
     active_quests: string;
     completed_quests: string;
     failed_quests: string;
+    chain_choices?: string | null;
 }

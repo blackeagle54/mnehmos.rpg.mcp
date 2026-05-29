@@ -586,4 +586,375 @@ describe('quest_manage consolidated tool', () => {
             expect(text).toContain('<!-- QUEST_MANAGE_JSON');
         });
     });
+
+    // ════════════════════════════════════════════════════════════════════
+    // PHASE-3: QUEST CHAINS
+    // ════════════════════════════════════════════════════════════════════
+    describe('quest chains (Phase-3)', () => {
+        // helper: create a bare quest and return its id
+        async function createQuest(name: string, extra: Record<string, unknown> = {}): Promise<string> {
+            const res = parseResult(await handleQuestManage({
+                action: 'create',
+                name,
+                description: name,
+                worldId: testWorldId,
+                objectives: [{ description: 'do it', type: 'custom' }],
+                ...extra
+            }, ctx));
+            return res.questId;
+        }
+
+        // helper: assign, complete all objectives, then complete the quest
+        async function completeQuest(characterId: string, questId: string) {
+            await handleQuestManage({ action: 'assign', characterId, questId }, ctx);
+            const objectives = parseResult(await handleQuestManage({ action: 'get', questId }, ctx)).quest.objectives;
+            for (const obj of objectives) {
+                await handleQuestManage({ action: 'complete_objective', questId, objectiveId: obj.id }, ctx);
+            }
+            return parseResult(await handleQuestManage({ action: 'complete', characterId, questId }, ctx));
+        }
+
+        describe('set_chain', () => {
+            it('persists chain and round-trips nextQuests/branches verbatim', async () => {
+                const a = await createQuest('Chain A');
+                const b = await createQuest('Chain B');
+                const c = await createQuest('Chain C');
+
+                const setRes = parseResult(await handleQuestManage({
+                    action: 'set_chain',
+                    questId: a,
+                    chainId: 'epic',
+                    order: 0,
+                    nextQuests: [b],
+                    branches: [
+                        { choiceId: 'good', label: 'The good path', questId: b },
+                        { choiceId: 'evil', label: 'The evil path', questId: c }
+                    ]
+                }, ctx));
+
+                expect(setRes.success).toBe(true);
+                expect(setRes.actionType).toBe('set_chain');
+                expect(setRes.questId).toBe(a);
+                expect(setRes.chain.chainId).toBe('epic');
+                expect(setRes.chain.order).toBe(0);
+                expect(setRes.chain.nextQuests).toEqual([b]);
+                expect(setRes.chain.branches).toEqual([
+                    { choiceId: 'good', label: 'The good path', questId: b },
+                    { choiceId: 'evil', label: 'The evil path', questId: c }
+                ]);
+
+                // Reload round-trip: get must return the persisted chain.
+                const got = parseResult(await handleQuestManage({ action: 'get', questId: a }, ctx));
+                expect(got.quest.chain.chainId).toBe('epic');
+                expect(got.quest.chain.nextQuests).toEqual([b]);
+                expect(got.quest.chain.branches).toEqual([
+                    { choiceId: 'good', label: 'The good path', questId: b },
+                    { choiceId: 'evil', label: 'The evil path', questId: c }
+                ]);
+            });
+
+            it('rejects a nextQuests target that does not exist', async () => {
+                const a = await createQuest('Chain A2');
+                const res = parseResult(await handleQuestManage({
+                    action: 'set_chain',
+                    questId: a,
+                    nextQuests: ['nonexistent-quest']
+                }, ctx));
+                expect(res.error).toBe(true);
+                expect(res.message).toContain('nonexistent-quest');
+            });
+
+            it('rejects a branch target that does not exist', async () => {
+                const a = await createQuest('Chain A3');
+                const res = parseResult(await handleQuestManage({
+                    action: 'set_chain',
+                    questId: a,
+                    branches: [{ choiceId: 'x', label: 'X', questId: 'ghost-quest' }]
+                }, ctx));
+                expect(res.error).toBe(true);
+                expect(res.message).toContain('ghost-quest');
+            });
+
+            it('rejects self-reference in nextQuests', async () => {
+                const a = await createQuest('Chain A4');
+                const res = parseResult(await handleQuestManage({
+                    action: 'set_chain',
+                    questId: a,
+                    nextQuests: [a]
+                }, ctx));
+                expect(res.error).toBe(true);
+                expect(res.message.toLowerCase()).toContain('itself');
+            });
+
+            it('rejects self-reference in a branch', async () => {
+                const a = await createQuest('Chain A5');
+                const res = parseResult(await handleQuestManage({
+                    action: 'set_chain',
+                    questId: a,
+                    branches: [{ choiceId: 'self', label: 'Self', questId: a }]
+                }, ctx));
+                expect(res.error).toBe(true);
+                expect(res.message.toLowerCase()).toContain('itself');
+            });
+
+            it('errors when the source quest does not exist', async () => {
+                const res = parseResult(await handleQuestManage({
+                    action: 'set_chain',
+                    questId: 'no-such-quest',
+                    nextQuests: []
+                }, ctx));
+                expect(res.error).toBe(true);
+                expect(res.message).toContain('no-such-quest');
+            });
+        });
+
+        describe('complete auto-unlock', () => {
+            it('flips a gated next quest from locked to available when prereqs are met', async () => {
+                const a = await createQuest('Gate A');
+                // B requires A as a prerequisite and is the chain.nextQuests of A.
+                const b = await createQuest('Gate B', { prerequisites: [a] });
+                await handleQuestManage({
+                    action: 'set_chain', questId: a, chainId: 'linear', order: 0, nextQuests: [b]
+                }, ctx);
+                await handleQuestManage({
+                    action: 'set_chain', questId: b, chainId: 'linear', order: 1
+                }, ctx);
+
+                // Before completing A, B is locked for this character.
+                const beforeChain = parseResult(await handleQuestManage({
+                    action: 'get_chain', chainId: 'linear', characterId: testCharacterId
+                }, ctx));
+                const bBefore = beforeChain.quests.find((q: { id: string }) => q.id === b);
+                expect(bBefore.unlockState).toBe('locked');
+
+                // Assigning B now must fail (prereq A not completed).
+                const assignBefore = parseResult(await handleQuestManage({
+                    action: 'assign', characterId: testCharacterId, questId: b
+                }, ctx));
+                expect(assignBefore.error).toBe(true);
+
+                // Complete A.
+                const completeRes = await completeQuest(testCharacterId, a);
+                expect(completeRes.success).toBe(true);
+                // The complete payload reports B as newly unlocked.
+                expect(completeRes.unlockedNext).toContain(b);
+
+                // get_chain now reports B as available.
+                const afterChain = parseResult(await handleQuestManage({
+                    action: 'get_chain', chainId: 'linear', characterId: testCharacterId
+                }, ctx));
+                const bAfter = afterChain.quests.find((q: { id: string }) => q.id === b);
+                expect(bAfter.unlockState).toBe('available');
+
+                // And assigning B now succeeds.
+                const assignAfter = parseResult(await handleQuestManage({
+                    action: 'assign', characterId: testCharacterId, questId: b
+                }, ctx));
+                expect(assignAfter.success).toBe(true);
+            });
+
+            it('does NOT bypass an unmet skill gate on a next quest', async () => {
+                const a = await createQuest('SkillGate A');
+                // B gated behind a skill the character does not have.
+                const b = await createQuest('SkillGate B', {
+                    prerequisites: [a],
+                    skillRequirements: [{ skill: 'crafting', level: 20 }]
+                });
+                await handleQuestManage({ action: 'set_chain', questId: a, chainId: 'sg', order: 0, nextQuests: [b] }, ctx);
+                await handleQuestManage({ action: 'set_chain', questId: b, chainId: 'sg', order: 1 }, ctx);
+
+                const completeRes = await completeQuest(testCharacterId, a);
+                expect(completeRes.success).toBe(true);
+                // B must NOT appear in unlockedNext because its skill gate is unmet.
+                expect(completeRes.unlockedNext ?? []).not.toContain(b);
+
+                // get_chain still reports B as locked.
+                const chain = parseResult(await handleQuestManage({
+                    action: 'get_chain', chainId: 'sg', characterId: testCharacterId
+                }, ctx));
+                const bNode = chain.quests.find((q: { id: string }) => q.id === b);
+                expect(bNode.unlockState).toBe('locked');
+
+                // Assign still errors with the skill message (chain did not bypass it).
+                const assignRes = parseResult(await handleQuestManage({
+                    action: 'assign', characterId: testCharacterId, questId: b
+                }, ctx));
+                expect(assignRes.error).toBe(true);
+                expect(assignRes.message).toContain('crafting');
+            });
+        });
+
+        describe('branching', () => {
+            it('does not auto-unlock branch targets; select_branch unlocks only the chosen one', async () => {
+                const a = await createQuest('Branch A');
+                const good = await createQuest('Good Path', { prerequisites: [a] });
+                const evil = await createQuest('Evil Path', { prerequisites: [a] });
+                await handleQuestManage({
+                    action: 'set_chain',
+                    questId: a,
+                    chainId: 'moral',
+                    order: 0,
+                    branches: [
+                        { choiceId: 'good', label: 'Good', questId: good },
+                        { choiceId: 'evil', label: 'Evil', questId: evil }
+                    ]
+                }, ctx);
+
+                const completeRes = await completeQuest(testCharacterId, a);
+                expect(completeRes.success).toBe(true);
+                // Branch quests surfaced for the player to choose, NOT auto-unlocked.
+                expect(completeRes.unlockedBranches).toEqual([
+                    { choiceId: 'good', label: 'Good', questId: good },
+                    { choiceId: 'evil', label: 'Evil', questId: evil }
+                ]);
+                // Auto-unlock must not have unlocked branch targets directly.
+                expect(completeRes.unlockedNext ?? []).not.toContain(good);
+                expect(completeRes.unlockedNext ?? []).not.toContain(evil);
+
+                // Player chooses good.
+                const sel = parseResult(await handleQuestManage({
+                    action: 'select_branch',
+                    characterId: testCharacterId,
+                    chainId: 'moral',
+                    choiceId: 'good'
+                }, ctx));
+                expect(sel.success).toBe(true);
+                expect(sel.chosenQuestId).toBe(good);
+
+                // The good path is now assignable; the evil path is not.
+                const assignGood = parseResult(await handleQuestManage({
+                    action: 'assign', characterId: testCharacterId, questId: good
+                }, ctx));
+                expect(assignGood.success).toBe(true);
+
+                const assignEvil = parseResult(await handleQuestManage({
+                    action: 'assign', characterId: testCharacterId, questId: evil
+                }, ctx));
+                expect(assignEvil.error).toBe(true);
+
+                // The choice is recorded on the log.
+                const chain = parseResult(await handleQuestManage({
+                    action: 'get_chain', chainId: 'moral', characterId: testCharacterId
+                }, ctx));
+                expect(chain.chainChoices?.moral).toBe('good');
+            });
+
+            it('select_branch rejects a choiceId not present in the source quest branches', async () => {
+                const a = await createQuest('Branch A2');
+                const good = await createQuest('Good Path 2', { prerequisites: [a] });
+                await handleQuestManage({
+                    action: 'set_chain',
+                    questId: a,
+                    chainId: 'moral2',
+                    order: 0,
+                    branches: [{ choiceId: 'good', label: 'Good', questId: good }]
+                }, ctx);
+                await completeQuest(testCharacterId, a);
+
+                const sel = parseResult(await handleQuestManage({
+                    action: 'select_branch',
+                    characterId: testCharacterId,
+                    chainId: 'moral2',
+                    choiceId: 'nonexistent'
+                }, ctx));
+                expect(sel.error).toBe(true);
+                expect(sel.message).toContain('nonexistent');
+            });
+        });
+
+        describe('get_chain unlockState derivation', () => {
+            it('reflects locked/available/active/completed across a linear chain', async () => {
+                const a = await createQuest('Linear 1');
+                const b = await createQuest('Linear 2', { prerequisites: [a] });
+                const c = await createQuest('Linear 3', { prerequisites: [b] });
+                await handleQuestManage({ action: 'set_chain', questId: a, chainId: 'lin', order: 0, nextQuests: [b] }, ctx);
+                await handleQuestManage({ action: 'set_chain', questId: b, chainId: 'lin', order: 1, nextQuests: [c] }, ctx);
+                await handleQuestManage({ action: 'set_chain', questId: c, chainId: 'lin', order: 2 }, ctx);
+
+                // Initial: A available, B & C locked.
+                let chain = parseResult(await handleQuestManage({
+                    action: 'get_chain', chainId: 'lin', characterId: testCharacterId
+                }, ctx));
+                const node = (id: string) => chain.quests.find((q: { id: string }) => q.id === id);
+                expect(node(a).unlockState).toBe('available');
+                expect(node(b).unlockState).toBe('locked');
+                expect(node(c).unlockState).toBe('locked');
+                // Quests come back ordered by chain.order.
+                expect(chain.quests.map((q: { id: string }) => q.id)).toEqual([a, b, c]);
+
+                // Assign A -> active.
+                await handleQuestManage({ action: 'assign', characterId: testCharacterId, questId: a }, ctx);
+                chain = parseResult(await handleQuestManage({
+                    action: 'get_chain', chainId: 'lin', characterId: testCharacterId
+                }, ctx));
+                expect(node(a).unlockState).toBe('active');
+
+                // Complete A -> A completed, B available.
+                await completeQuest(testCharacterId, a);
+                chain = parseResult(await handleQuestManage({
+                    action: 'get_chain', chainId: 'lin', characterId: testCharacterId
+                }, ctx));
+                expect(node(a).unlockState).toBe('completed');
+                expect(node(b).unlockState).toBe('available');
+                expect(node(c).unlockState).toBe('locked');
+            });
+
+            it('supports get_chain lookup by questId', async () => {
+                const a = await createQuest('ByQuest A');
+                const b = await createQuest('ByQuest B');
+                await handleQuestManage({ action: 'set_chain', questId: a, chainId: 'byq', order: 0, nextQuests: [b] }, ctx);
+                await handleQuestManage({ action: 'set_chain', questId: b, chainId: 'byq', order: 1 }, ctx);
+
+                const chain = parseResult(await handleQuestManage({
+                    action: 'get_chain', questId: a, characterId: testCharacterId
+                }, ctx));
+                expect(chain.success).toBe(true);
+                expect(chain.chainId).toBe('byq');
+                expect(chain.quests.map((q: { id: string }) => q.id).sort()).toEqual([a, b].sort());
+            });
+        });
+
+        describe('list_chains', () => {
+            it('groups quests by chainId with counts', async () => {
+                const a = await createQuest('Group A');
+                const b = await createQuest('Group B');
+                await handleQuestManage({ action: 'set_chain', questId: a, chainId: 'grp', order: 0, nextQuests: [b] }, ctx);
+                await handleQuestManage({ action: 'set_chain', questId: b, chainId: 'grp', order: 1 }, ctx);
+
+                const res = parseResult(await handleQuestManage({ action: 'list_chains', worldId: testWorldId }, ctx));
+                expect(res.success).toBe(true);
+                const grp = res.chains.find((c: { chainId: string }) => c.chainId === 'grp');
+                expect(grp).toBeDefined();
+                expect(grp.questCount).toBe(2);
+            });
+        });
+
+        describe('persistence round-trip', () => {
+            it('survives a getDb reload (chain + chainChoices persisted to disk semantics)', async () => {
+                const a = await createQuest('Persist A');
+                const b = await createQuest('Persist B', { prerequisites: [a] });
+                await handleQuestManage({
+                    action: 'set_chain',
+                    questId: a,
+                    chainId: 'persist',
+                    order: 0,
+                    branches: [{ choiceId: 'pick', label: 'Pick', questId: b }]
+                }, ctx);
+                await completeQuest(testCharacterId, a);
+                await handleQuestManage({
+                    action: 'select_branch', characterId: testCharacterId, chainId: 'persist', choiceId: 'pick'
+                }, ctx);
+
+                // Re-read via a fresh handler call (repo round-trips through rowToQuest / rowToQuestLog).
+                const got = parseResult(await handleQuestManage({ action: 'get', questId: a }, ctx));
+                expect(got.quest.chain.chainId).toBe('persist');
+                expect(got.quest.chain.branches).toEqual([{ choiceId: 'pick', label: 'Pick', questId: b }]);
+
+                const chain = parseResult(await handleQuestManage({
+                    action: 'get_chain', chainId: 'persist', characterId: testCharacterId
+                }, ctx));
+                expect(chain.chainChoices?.persist).toBe('pick');
+            });
+        });
+    });
 });
