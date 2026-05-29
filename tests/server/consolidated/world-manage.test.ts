@@ -5,6 +5,7 @@
 
 import { handleWorldManage, WorldManageTool } from '../../../src/server/consolidated/world-manage.js';
 import { getDb } from '../../../src/storage/index.js';
+import { WorldRepository } from '../../../src/storage/repos/world.repo.js';
 import { randomUUID } from 'crypto';
 
 process.env.NODE_ENV = 'test';
@@ -267,6 +268,28 @@ describe('world_manage consolidated tool', () => {
             const got = parseResult(await handleWorldManage({ action: 'get', id: worldId }, ctx));
             expect(got.world.environment.timeOfDay).toBe('dusk');
             expect(got.world.environment.weatherConditions).toBe('rain');
+        });
+
+        // CodeRabbit (PR #28): updateEnvironment shallow-merges, so a deprecated
+        // alias already persisted on a legacy world is not removed merely by
+        // omitting it from the patch. A canonical update must converge — clear it.
+        it('clears deprecated alias keys already persisted on a legacy world (#65)', async () => {
+            const createResult = await handleWorldManage({
+                action: 'create', name: 'Legacy World', seed: 'legacy', width: 20, height: 20
+            }, ctx);
+            const worldId = parseResult(createResult).worldId;
+
+            // Simulate a record written before canonicalization (raw alias persisted).
+            new WorldRepository(getDb(':memory:')).updateEnvironment(worldId, { dayNightCycle: 'night' });
+
+            await handleWorldManage({
+                action: 'update', id: worldId,
+                environment: { weatherConditions: 'clear' }
+            }, ctx);
+
+            const got = parseResult(await handleWorldManage({ action: 'get', id: worldId }, ctx));
+            expect(got.world.environment.dayNightCycle).toBeUndefined();
+            expect(got.world.environment.weatherConditions).toBe('clear');
         });
     });
 

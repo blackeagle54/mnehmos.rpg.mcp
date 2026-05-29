@@ -192,6 +192,12 @@ function normalizeEnvironmentPatch(env: Record<string, unknown>): Record<string,
     if (weather !== undefined && normalized.weatherConditions === undefined) {
         normalized.weatherConditions = weather;
     }
+    // Explicitly clear the deprecated aliases. WorldRepository.updateEnvironment
+    // shallow-merges this patch over the stored record and persists via
+    // JSON.stringify (which omits undefined), so setting these undefined removes
+    // any legacy dayNightCycle/weather already persisted on a world. (#65, CodeRabbit)
+    normalized.dayNightCycle = undefined;
+    normalized.weather = undefined;
     return normalized;
 }
 
