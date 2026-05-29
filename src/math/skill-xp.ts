@@ -1,4 +1,12 @@
-import { MAX_SKILL_LEVEL, MAX_SKILL_XP } from '../schema/skill.js';
+/**
+ * Hard caps for the OSRS-style curve. Named constants so 99/13034431 are never
+ * inlined. This module is the OWNER of these constants — `schema/skill.ts`
+ * re-exports them. Owning them here keeps the dependency one-directional
+ * (skill-xp imports nothing from schema/skill) so schema/skill can import
+ * `levelFromXp` to enforce xp↔level consistency without a circular import.
+ */
+export const MAX_SKILL_LEVEL = 99;
+export const MAX_SKILL_XP = 13_034_431;
 
 /**
  * PHASE-3: OSRS-style skill XP curve (pure, deterministic).
@@ -29,9 +37,12 @@ const SKILL_XP_TABLE = buildXpTable();
 
 /** Clamp a level into the valid 1..MAX_SKILL_LEVEL range. */
 function clampLevel(level: number): number {
-    if (level < 1) return 1;
-    if (level > MAX_SKILL_LEVEL) return MAX_SKILL_LEVEL;
-    return Math.floor(level);
+    // Non-finite (NaN/±Infinity) coerces to the safe floor (level 1) BEFORE the
+    // range clamps so it never slips through and produces NaN downstream.
+    const safe = Number.isFinite(level) ? level : 1;
+    if (safe < 1) return 1;
+    if (safe > MAX_SKILL_LEVEL) return MAX_SKILL_LEVEL;
+    return Math.floor(safe);
 }
 
 /** Cumulative XP required to reach `level`. Pure; clamps out-of-range input. */
@@ -44,7 +55,10 @@ export function xpForLevel(level: number): number {
  * Scans from the top so the FIRST threshold met wins. Clamps XP to 0..MAX.
  */
 export function levelFromXp(totalXp: number): number {
-    const xp = totalXp < 0 ? 0 : totalXp > MAX_SKILL_XP ? MAX_SKILL_XP : totalXp;
+    // Coerce non-finite XP to the safe floor (0) BEFORE range clamps so NaN/±∞
+    // can never reach the comparison and yield a bogus level.
+    const finiteXp = Number.isFinite(totalXp) ? totalXp : 0;
+    const xp = finiteXp < 0 ? 0 : finiteXp > MAX_SKILL_XP ? MAX_SKILL_XP : finiteXp;
     for (let lvl = MAX_SKILL_LEVEL; lvl >= 1; lvl--) {
         if (xp >= SKILL_XP_TABLE[lvl]) return lvl;
     }
@@ -62,7 +76,10 @@ export interface SkillProgress {
 
 /** Progress data for UI bars: how far into the current level the XP sits. */
 export function xpProgress(totalXp: number): SkillProgress {
-    const xp = totalXp < 0 ? 0 : totalXp > MAX_SKILL_XP ? MAX_SKILL_XP : totalXp;
+    // Coerce non-finite XP to the safe floor (0) up front so no field (totalXp,
+    // xpIntoLevel, xpToNext) can ever come out NaN.
+    const finiteXp = Number.isFinite(totalXp) ? totalXp : 0;
+    const xp = finiteXp < 0 ? 0 : finiteXp > MAX_SKILL_XP ? MAX_SKILL_XP : finiteXp;
     const level = levelFromXp(xp);
     const atMax = level >= MAX_SKILL_LEVEL;
     const xpForNextLevel = atMax ? null : xpForLevel(level + 1);

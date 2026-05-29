@@ -42,6 +42,12 @@ describe('skill-xp curve', () => {
             expect(xpForLevel(-5)).toBe(0);
             expect(xpForLevel(200)).toBe(xpForLevel(MAX_SKILL_LEVEL));
         });
+
+        it('coerces a non-finite level to the safe floor (level 1 → 0 XP)', () => {
+            expect(xpForLevel(NaN)).toBe(0);
+            expect(xpForLevel(Infinity)).toBe(0);
+            expect(xpForLevel(-Infinity)).toBe(0);
+        });
     });
 
     describe('levelFromXp — round-trip and boundaries', () => {
@@ -65,6 +71,14 @@ describe('skill-xp curve', () => {
         it('clamps XP above MAX to level 99', () => {
             expect(levelFromXp(99999999)).toBe(MAX_SKILL_LEVEL);
             expect(levelFromXp(MAX_SKILL_XP)).toBe(MAX_SKILL_LEVEL);
+        });
+
+        it('coerces non-finite XP to the safe floor (level 1)', () => {
+            // Non-finite is coerced to 0 BEFORE the range clamps, so all three
+            // resolve to level 1 (no NaN, no spurious level 99 from +Infinity).
+            expect(levelFromXp(NaN)).toBe(1);
+            expect(levelFromXp(Infinity)).toBe(1);
+            expect(levelFromXp(-Infinity)).toBe(1);
         });
     });
 
@@ -96,6 +110,21 @@ describe('skill-xp curve', () => {
             expect(p.xpForNextLevel).toBe(next);
             expect(p.xpToNext).toBe(next - (base + 50));
             expect(p.atMax).toBe(false);
+        });
+
+        it('coerces non-finite XP to level 1 with all-finite fields (no NaN)', () => {
+            const p = xpProgress(NaN);
+            expect(p.level).toBe(1);
+            expect(p.totalXp).toBe(0);
+            expect(p.xpIntoLevel).toBe(0);
+            expect(p.xpForNextLevel).toBe(xpForLevel(2));
+            expect(p.xpToNext).toBe(xpForLevel(2));
+            expect(p.atMax).toBe(false);
+            // Every numeric field is finite — the regression the guard prevents.
+            expect(Number.isFinite(p.totalXp)).toBe(true);
+            expect(Number.isFinite(p.xpIntoLevel)).toBe(true);
+            expect(Number.isFinite(p.xpToNext)).toBe(true);
+            expect(Number.isFinite(p.xpForNextLevel as number)).toBe(true);
         });
     });
 });

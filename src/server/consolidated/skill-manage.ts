@@ -130,7 +130,12 @@ async function handleGrantXp(args: z.infer<typeof GrantXpSchema>): Promise<objec
 
     skills[args.skill] = { xp: newXp, level: newLevel };
     // Orthogonality: only the skills map is updated — character.xp/level untouched.
-    characterRepo.update(args.characterId, { skills });
+    // Check the write result: update() returns null if the character was deleted
+    // between the read above and this write (TOCTOU window).
+    const updated = characterRepo.update(args.characterId, { skills });
+    if (!updated) {
+        return { error: true, message: `Character ${args.characterId} not found` };
+    }
 
     return {
         success: true,
@@ -160,7 +165,12 @@ async function handleSetLevel(args: z.infer<typeof SetLevelSchema>): Promise<obj
     // exact threshold for the requested level.
     const xp = xpForLevel(args.level);
     skills[args.skill] = { xp, level: args.level };
-    characterRepo.update(args.characterId, { skills });
+    // Check the write result: update() returns null if the character was deleted
+    // between the read above and this write (TOCTOU window).
+    const updated = characterRepo.update(args.characterId, { skills });
+    if (!updated) {
+        return { error: true, message: `Character ${args.characterId} not found` };
+    }
 
     return {
         success: true,

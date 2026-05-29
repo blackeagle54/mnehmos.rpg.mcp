@@ -181,7 +181,10 @@ async function handleGet(args: z.infer<typeof GetSchema>): Promise<object> {
             status: quest.status,
             objectives: quest.objectives,
             rewards: quest.rewards,
-            prerequisites: quest.prerequisites
+            prerequisites: quest.prerequisites,
+            // create persists skillRequirements; return them here so a
+            // create→get round-trip preserves the skill gates.
+            skillRequirements: quest.skillRequirements
         }
     };
 }

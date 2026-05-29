@@ -205,6 +205,33 @@ describe('quest_manage consolidated tool', () => {
             const data = parseResult(result);
             expect(data.actionType).toBe('get');
         });
+
+        // create persists skillRequirements; get must return them so the
+        // create→get round-trip is lossless (regression: get dropped them).
+        it('returns skillRequirements created on the quest (round-trip parity)', async () => {
+            const created = parseResult(await handleQuestManage({
+                action: 'create',
+                name: 'Arcane Trial',
+                description: 'Prove your magical aptitude',
+                worldId: testWorldId,
+                objectives: [{ description: 'Cast the rite', type: 'custom' }],
+                skillRequirements: [
+                    { skill: 'magic', level: 30 },
+                    { skill: 'social', level: 5 }
+                ]
+            }, ctx));
+
+            const got = parseResult(await handleQuestManage({
+                action: 'get',
+                questId: created.questId
+            }, ctx));
+
+            expect(got.success).toBe(true);
+            expect(got.quest.skillRequirements).toEqual([
+                { skill: 'magic', level: 30 },
+                { skill: 'social', level: 5 }
+            ]);
+        });
     });
 
     describe('list action', () => {

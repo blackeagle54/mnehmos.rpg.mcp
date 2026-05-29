@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { MAX_SKILL_LEVEL, MAX_SKILL_XP, levelFromXp } from '../math/skill-xp.js';
 
 /**
  * PHASE-3: OSRS-style progression skills.
@@ -16,13 +17,38 @@ export const SKILL_NAMES = ['combat', 'magic', 'crafting', 'gathering', 'social'
 export const SkillNameSchema = z.enum(SKILL_NAMES);
 export type SkillName = z.infer<typeof SkillNameSchema>;
 
-/** Hard caps for the OSRS-style curve. Named constants so 99/13034431 are never inlined. */
-export const MAX_SKILL_LEVEL = 99;
-export const MAX_SKILL_XP = 13_034_431;
+/**
+ * Hard caps for the OSRS-style curve. The OWNER of these constants is
+ * `src/math/skill-xp.ts`; we re-export them here so existing importers of
+ * `MAX_SKILL_LEVEL`/`MAX_SKILL_XP` from this module keep working. Owning them
+ * in skill-xp breaks the import cycle (skill-xp ← schema/skill becomes
+ * one-directional), which lets this schema import `levelFromXp` for the
+ * consistency refine below.
+ */
+export { MAX_SKILL_LEVEL, MAX_SKILL_XP } from '../math/skill-xp.js';
 
+/**
+ * A single skill's stored {xp, level} pair.
+ *
+ * `.superRefine` enforces that the stored `level` is exactly the level derived
+ * from `xp` via the curve, so contradictory pairs (e.g. {xp:0, level:50}) are
+ * rejected at parse time. superRefine (not refine) keeps the result a
+ * ZodObject so `.default(...)` chaining and `SkillsSchema` composition below
+ * stay type-compatible (no ZodEffects-wrapping surprises for SkillsSchema's
+ * per-key defaults). levelFromXp(0)===1, so the {xp:0, level:1} defaults pass.
+ */
 export const SkillEntrySchema = z.object({
     xp: z.number().int().min(0).max(MAX_SKILL_XP).default(0),
     level: z.number().int().min(1).max(MAX_SKILL_LEVEL).default(1),
+}).superRefine((data, ctx) => {
+    const expected = levelFromXp(data.xp);
+    if (data.level !== expected) {
+        ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['level'],
+            message: `level ${data.level} is inconsistent with xp ${data.xp} (expected level ${expected})`,
+        });
+    }
 });
 export type SkillEntry = z.infer<typeof SkillEntrySchema>;
 

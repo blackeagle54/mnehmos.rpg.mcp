@@ -179,6 +179,19 @@ describe('skill_manage consolidated tool', () => {
             expect(after.level).toBe(before.level);
         });
 
+        it('errors (not success) when the character does not exist', async () => {
+            // Guards the write-after-read window: update() returns null for a
+            // missing/deleted character, so the handler must report an error.
+            const data = parseResult(await handleSkillManage({
+                action: 'grant_xp',
+                characterId: 'does-not-exist',
+                skill: 'combat',
+                amount: 100,
+            }, ctx));
+            expect(data.error).toBe(true);
+            expect(data.success).toBeUndefined();
+        });
+
         it('clamps at MAX_SKILL_XP / level 99', async () => {
             const data = parseResult(await handleSkillManage({
                 action: 'grant_xp',
@@ -209,6 +222,19 @@ describe('skill_manage consolidated tool', () => {
                 characterId: testCharacterId,
             }, ctx));
             expect(after.skills.crafting).toEqual({ xp: xpForLevel(50), level: 50 });
+        });
+
+        it('errors (not success) when the character does not exist', async () => {
+            // Guards the write-after-read window: update() returns null for a
+            // missing/deleted character, so the handler must report an error.
+            const data = parseResult(await handleSkillManage({
+                action: 'set_level',
+                characterId: 'does-not-exist',
+                skill: 'crafting',
+                level: 10,
+            }, ctx));
+            expect(data.error).toBe(true);
+            expect(data.success).toBeUndefined();
         });
     });
 
