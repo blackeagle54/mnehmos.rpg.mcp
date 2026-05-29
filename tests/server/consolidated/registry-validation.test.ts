@@ -11,6 +11,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { z } from 'zod';
 
 const FAKE_HANDLER = async () => ({ ok: true });
 
@@ -22,7 +23,7 @@ function fakeTool(overrides: Record<string, unknown>) {
       category: 'meta',
       keywords: ['keyword'],
       capabilities: ['Capability'],
-      inputSchema: {},
+      inputSchema: z.object({}), // a real Zod schema, matching ToolContract.inputSchema: z.ZodTypeAny
       ...overrides,
     },
     handler: FAKE_HANDLER,
