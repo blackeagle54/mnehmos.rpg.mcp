@@ -27,10 +27,21 @@ import {
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
- * Handler function for a specific action
+ * Handler function for a specific action.
+ *
+ * The optional 2nd `ctx` argument lets the router thread per-request session
+ * context explicitly to handlers that need it (#14). The type slot is `any`
+ * (not `SessionContext`) on purpose: this module lives under `src/utils` and
+ * must stay free of `src/server` imports, yet concrete handlers in the
+ * consolidated tools declare a typed `ctx: SessionContext` and must remain
+ * assignable here without a cast. The `route()` function itself accepts the
+ * runtime ctx as `unknown` and forwards it opaquely. Handlers that don't need
+ * context simply ignore the extra (optional) parameter, so the 19 tools with
+ * 0/1-arg handlers remain unaffected.
  */
 export type ActionHandler<TArgs = unknown, TResult = unknown> = (
-    args: TArgs
+    args: TArgs,
+    ctx?: any
 ) => Promise<TResult> | TResult;
 
 /**
@@ -42,8 +53,13 @@ export type ActionHandler<TArgs = unknown, TResult = unknown> = (
 export interface ActionDefinition {
     /** Zod schema for action-specific parameters */
     schema: z.ZodType<any>;
-    /** Handler function for this action (validated args from schema) */
-    handler: (args: any) => Promise<unknown> | unknown;
+    /**
+     * Handler function for this action (validated args from schema).
+     * Receives the optional per-request session context as a 2nd argument (#14).
+     * The ctx slot is `any` so consolidated tools can declare a typed
+     * `ctx: SessionContext` handler while this util stays server-import-free.
+     */
+    handler: (args: any, ctx?: any) => Promise<unknown> | unknown;
     /** Optional aliases for this action (e.g., 'new' -> 'create') */
     aliases?: string[];
     /** Description for documentation */
@@ -114,7 +130,7 @@ export interface EnhancedResult<T> {
  */
 export function createActionRouter<TActions extends string>(
     config: ActionRouterConfig<TActions>
-): (args: Record<string, unknown>) => Promise<McpResponse> {
+): (args: Record<string, unknown>, ctx?: unknown) => Promise<McpResponse> {
     const { actions, definitions, threshold = 0.6 } = config;
 
     // Build alias map from definitions if not provided
@@ -129,7 +145,7 @@ export function createActionRouter<TActions extends string>(
         }
     }
 
-    return async function route(args: Record<string, unknown>): Promise<McpResponse> {
+    return async function route(args: Record<string, unknown>, ctx?: unknown): Promise<McpResponse> {
         // ─────────────────────────────────────────────────────────────────────
         // STEP 1: Extract and validate action
         // ─────────────────────────────────────────────────────────────────────
@@ -175,7 +191,8 @@ export function createActionRouter<TActions extends string>(
         // STEP 4: Execute handler
         // ─────────────────────────────────────────────────────────────────────
         try {
-            const result = await definition.handler(parseResult.data);
+            // Thread the optional per-request session context (#14).
+            const result = await definition.handler(parseResult.data, ctx);
 
             // ─────────────────────────────────────────────────────────────────
             // STEP 5: Format response with optional fuzzy match metadata
@@ -214,8 +231,8 @@ export function createActionRouter<TActions extends string>(
 export function createDiscriminatedRouter<TSchema extends z.ZodSchema>(
     schema: TSchema,
     handlers: Record<string, ActionHandler>
-): (args: unknown) => Promise<McpResponse> {
-    return async function route(args: unknown): Promise<McpResponse> {
+): (args: unknown, ctx?: unknown) => Promise<McpResponse> {
+    return async function route(args: unknown, ctx?: unknown): Promise<McpResponse> {
         // Parse and validate
         const parseResult = schema.safeParse(args);
 
@@ -231,7 +248,8 @@ export function createDiscriminatedRouter<TSchema extends z.ZodSchema>(
         }
 
         try {
-            const result = await handler(parsed);
+            // Thread the optional per-request session context (#14).
+            const result = await handler(parsed, ctx);
             return formatMcpSuccess(result, { matched: parsed.action, exact: true, similarity: 1 });
         } catch (error) {
             return formatMcpError(

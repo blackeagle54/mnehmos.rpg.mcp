@@ -97,20 +97,17 @@ const ReadySchema = z.object({
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// CONTEXT HOLDER
-// ═══════════════════════════════════════════════════════════════════════════
-
-let currentContext: SessionContext | null = null;
-
-// ═══════════════════════════════════════════════════════════════════════════
 // ACTION DEFINITIONS
 // ═══════════════════════════════════════════════════════════════════════════
+//
+// Each handler receives the per-request SessionContext explicitly as its 2nd
+// argument (threaded by the router, #14). No module-scoped mutable holder.
 
 const definitions: Record<CombatAction, ActionDefinition> = {
     attack: {
         schema: AttackSchema,
-        handler: async (params: z.infer<typeof AttackSchema>) => {
-            if (!currentContext) throw new Error('No session context');
+        handler: async (params: z.infer<typeof AttackSchema>, ctx: SessionContext) => {
+            if (!ctx) throw new Error('No session context');
             const result = await handleExecuteCombatAction({
                 encounterId: params.encounterId,
                 action: 'attack',
@@ -120,7 +117,7 @@ const definitions: Record<CombatAction, ActionDefinition> = {
                 dc: params.dc,
                 damage: params.damage,
                 damageType: params.damageType
-            }, currentContext);
+            }, ctx);
             return extractResultData(result, 'attack');
         },
         aliases: ['hit', 'strike', 'swing', 'shoot']
@@ -128,15 +125,15 @@ const definitions: Record<CombatAction, ActionDefinition> = {
 
     heal: {
         schema: HealSchema,
-        handler: async (params: z.infer<typeof HealSchema>) => {
-            if (!currentContext) throw new Error('No session context');
+        handler: async (params: z.infer<typeof HealSchema>, ctx: SessionContext) => {
+            if (!ctx) throw new Error('No session context');
             const result = await handleExecuteCombatAction({
                 encounterId: params.encounterId,
                 action: 'heal',
                 actorId: params.actorId,
                 targetId: params.targetId,
                 amount: params.amount
-            }, currentContext);
+            }, ctx);
             return extractResultData(result, 'heal');
         },
         aliases: ['cure', 'restore', 'mend']
@@ -144,14 +141,14 @@ const definitions: Record<CombatAction, ActionDefinition> = {
 
     move: {
         schema: MoveSchema,
-        handler: async (params: z.infer<typeof MoveSchema>) => {
-            if (!currentContext) throw new Error('No session context');
+        handler: async (params: z.infer<typeof MoveSchema>, ctx: SessionContext) => {
+            if (!ctx) throw new Error('No session context');
             const result = await handleExecuteCombatAction({
                 encounterId: params.encounterId,
                 action: 'move',
                 actorId: params.actorId,
                 targetPosition: params.targetPosition
-            }, currentContext);
+            }, ctx);
             return extractResultData(result, 'move');
         },
         aliases: ['walk', 'run', 'go', 'position']
@@ -159,13 +156,13 @@ const definitions: Record<CombatAction, ActionDefinition> = {
 
     disengage: {
         schema: DisengageSchema,
-        handler: async (params: z.infer<typeof DisengageSchema>) => {
-            if (!currentContext) throw new Error('No session context');
+        handler: async (params: z.infer<typeof DisengageSchema>, ctx: SessionContext) => {
+            if (!ctx) throw new Error('No session context');
             const result = await handleExecuteCombatAction({
                 encounterId: params.encounterId,
                 action: 'disengage',
                 actorId: params.actorId
-            }, currentContext);
+            }, ctx);
             return extractResultData(result, 'disengage');
         },
         aliases: ['retreat', 'withdraw', 'back_off']
@@ -173,8 +170,8 @@ const definitions: Record<CombatAction, ActionDefinition> = {
 
     cast_spell: {
         schema: CastSpellSchema,
-        handler: async (params: z.infer<typeof CastSpellSchema>) => {
-            if (!currentContext) throw new Error('No session context');
+        handler: async (params: z.infer<typeof CastSpellSchema>, ctx: SessionContext) => {
+            if (!ctx) throw new Error('No session context');
             const result = await handleExecuteCombatAction({
                 encounterId: params.encounterId,
                 action: 'cast_spell',
@@ -183,7 +180,7 @@ const definitions: Record<CombatAction, ActionDefinition> = {
                 targetId: params.targetId,
                 targetIds: params.targetIds,
                 slotLevel: params.slotLevel
-            }, currentContext);
+            }, ctx);
             return extractResultData(result, 'cast_spell');
         },
         aliases: ['cast', 'spell', 'magic', 'invoke']
@@ -191,10 +188,10 @@ const definitions: Record<CombatAction, ActionDefinition> = {
 
     dash: {
         schema: DashSchema,
-        handler: async (params: z.infer<typeof DashSchema>) => {
-            if (!currentContext) throw new Error('No session context');
+        handler: async (params: z.infer<typeof DashSchema>, ctx: SessionContext) => {
+            if (!ctx) throw new Error('No session context');
 
-            const sessionKey = `${currentContext.sessionId}:${params.encounterId}`;
+            const sessionKey = `${ctx.sessionId}:${params.encounterId}`;
             let engine = getCombatManager().get(sessionKey);
 
             // Auto-load from DB if the engine isn't in memory (matches the
@@ -259,8 +256,8 @@ const definitions: Record<CombatAction, ActionDefinition> = {
 
     dodge: {
         schema: DodgeSchema,
-        handler: async (params: z.infer<typeof DodgeSchema>) => {
-            if (!currentContext) throw new Error('No session context');
+        handler: async (params: z.infer<typeof DodgeSchema>, ctx: SessionContext) => {
+            if (!ctx) throw new Error('No session context');
             // Dodge grants advantage on DEX saves, attackers have disadvantage
             return {
                 success: true,
@@ -275,8 +272,8 @@ const definitions: Record<CombatAction, ActionDefinition> = {
 
     help: {
         schema: HelpSchema,
-        handler: async (params: z.infer<typeof HelpSchema>) => {
-            if (!currentContext) throw new Error('No session context');
+        handler: async (params: z.infer<typeof HelpSchema>, ctx: SessionContext) => {
+            if (!ctx) throw new Error('No session context');
             // Help grants advantage to an ally's next attack/check
             return {
                 success: true,
@@ -292,8 +289,8 @@ const definitions: Record<CombatAction, ActionDefinition> = {
 
     ready: {
         schema: ReadySchema,
-        handler: async (params: z.infer<typeof ReadySchema>) => {
-            if (!currentContext) throw new Error('No session context');
+        handler: async (params: z.infer<typeof ReadySchema>, ctx: SessionContext) => {
+            if (!ctx) throw new Error('No session context');
             // Ready holds an action for a trigger
             return {
                 success: true,
@@ -408,8 +405,8 @@ Aliases: hit/strike→attack, cast/spell→cast_spell, sprint→dash, evade→do
 // ═══════════════════════════════════════════════════════════════════════════
 
 export async function handleCombatAction(args: unknown, ctx: SessionContext): Promise<McpResponse> {
-    currentContext = ctx;
-    const response = await router(args as Record<string, unknown>);
+    // Thread the per-request session context explicitly through the router (#14).
+    const response = await router(args as Record<string, unknown>, ctx);
 
     // Wrap response with ASCII formatting
     try {
@@ -509,11 +506,9 @@ export async function handleCombatAction(args: unknown, ctx: SessionContext): Pr
         // Embed JSON for programmatic access
         output += RichFormatter.embedJson(parsed, 'COMBAT_ACTION');
 
-        currentContext = null;
         return { content: [{ type: 'text', text: output }] };
     } catch {
         // If JSON parsing fails, return original response
-        currentContext = null;
         return response;
     }
 }
