@@ -4,8 +4,11 @@
  */
 
 import { handleWorldManage, WorldManageTool } from '../../../src/server/consolidated/world-manage.js';
+import { handleStrategyManage } from '../../../src/server/consolidated/strategy-manage.js';
 import { getDb } from '../../../src/storage/index.js';
 import { WorldRepository } from '../../../src/storage/repos/world.repo.js';
+import { RegionRepository } from '../../../src/storage/repos/region.repo.js';
+import { StructureRepository } from '../../../src/storage/repos/structure.repo.js';
 import { randomUUID } from 'crypto';
 
 process.env.NODE_ENV = 'test';
@@ -27,13 +30,27 @@ function parseResult(result: { content: Array<{ type: string; text: string }> })
     return { error: 'parse_failed', rawText: text };
 }
 
+// Local parser for the strategy_manage response envelope (mirror of parseResult
+// above, but for the STRATEGY_MANAGE_JSON marker the strategy tool embeds). (#64)
+function parseStrategyResult(result: { content: Array<{ type: string; text: string }> }) {
+    const text = result.content[0].text;
+    const jsonMatch = text.match(/<!-- STRATEGY_MANAGE_JSON\n([\s\S]*?)\nSTRATEGY_MANAGE_JSON -->/);
+    if (jsonMatch) {
+        return JSON.parse(jsonMatch[1]);
+    }
+    return { error: 'parse_failed', rawText: text };
+}
+
 describe('world_manage consolidated tool', () => {
     let ctx: { sessionId: string };
 
     beforeEach(async () => {
         ctx = { sessionId: `test-session-${randomUUID()}` };
         const db = getDb(':memory:');
-        db.exec('DELETE FROM worlds');
+        // #64: regions/structures (and nations/claims) now get written on generate, so
+        // clear them too to keep tests isolated. Never closeDb mid-suite — every handler
+        // and this test share the same getDb(':memory:') singleton under NODE_ENV=test.
+        db.exec('DELETE FROM territorial_claims; DELETE FROM nations; DELETE FROM structures; DELETE FROM regions; DELETE FROM worlds');
     });
 
     describe('Tool Definition', () => {
@@ -341,6 +358,69 @@ describe('world_manage consolidated tool', () => {
 
             const data = parseResult(result);
             expect(data.success).toBe(true);
+        });
+    });
+
+    // Regression for issue #64: handleGenerate persisted only the world row plus an
+    // in-memory copy and never wrote generated regions/structures to SQLite, so
+    // regionRepo.findByWorldId(worldId) returned [] and strategy_manage.claim_region
+    // failed with "Region not found" for any generated world.
+    describe('generate persistence (#64)', () => {
+        it('persists generated regions and structures to the region/structure repos', async () => {
+            const gen = parseResult(await handleWorldManage({
+                action: 'generate',
+                seed: 'persist-64',
+                width: 40,
+                height: 40
+            }, ctx));
+
+            const worldId = gen.worldId as string;
+            const db = getDb(':memory:');
+
+            const regions = new RegionRepository(db).findByWorldId(worldId);
+            const structures = new StructureRepository(db).findByWorldId(worldId);
+
+            // One persisted region per generated region.
+            expect(regions.length).toBe(gen.regionCount);
+            expect(regions.length).toBeGreaterThan(0);
+            // At least the placed structures (cities/towns/dungeons) are persisted.
+            expect(structures.length).toBeGreaterThan(0);
+        });
+
+        it('lets strategy_manage.claim_region resolve a generated region end-to-end', async () => {
+            const gen = parseResult(await handleWorldManage({
+                action: 'generate',
+                seed: 'persist-64-e2e',
+                width: 40,
+                height: 40
+            }, ctx));
+
+            const worldId = gen.worldId as string;
+            const db = getDb(':memory:');
+            const regions = new RegionRepository(db).findByWorldId(worldId);
+            expect(regions.length).toBeGreaterThan(0);
+
+            const region = regions[0];
+            expect(region.id.startsWith(`${worldId}-region-`)).toBe(true);
+
+            const nationRes = parseStrategyResult(await handleStrategyManage({
+                action: 'create_nation',
+                worldId,
+                name: 'Test Nation',
+                leader: 'Test Leader',
+                ideology: 'autocracy'
+            }, ctx));
+            expect(nationRes.success).toBe(true);
+            const nationId = nationRes.nationId as string;
+
+            const claimRes = parseStrategyResult(await handleStrategyManage({
+                action: 'claim_region',
+                nationId,
+                regionId: region.id
+            }, ctx));
+
+            expect(claimRes.success).toBe(true);
+            expect(claimRes.message).not.toBe('Region not found');
         });
     });
 

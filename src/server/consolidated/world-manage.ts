@@ -13,7 +13,12 @@ import { RichFormatter } from '../utils/formatter.js';
 import { getDb } from '../../storage/index.js';
 import { resolveConsolidatedDbPath } from './db-path.js';
 import { WorldRepository } from '../../storage/repos/world.repo.js';
+import { RegionRepository } from '../../storage/repos/region.repo.js';
+import { StructureRepository } from '../../storage/repos/structure.repo.js';
 import { World, EnvironmentSchema } from '../../schema/world.js';
+import { Region } from '../../schema/region.js';
+import { Structure, StructureType } from '../../schema/structure.js';
+import { BiomeType } from '../../schema/biome.js';
 import { generateWorld as generateWorldProc } from '../../engine/worldgen/index.js';
 import { getWorldManager } from '../state/world-manager.js';
 
@@ -31,6 +36,77 @@ type WorldManageAction = typeof ACTIONS[number];
 function getWorldRepo(): WorldRepository {
     const db = getDb(resolveConsolidatedDbPath());
     return new WorldRepository(db);
+}
+
+function getRegionRepo(): RegionRepository {
+    const db = getDb(resolveConsolidatedDbPath());
+    return new RegionRepository(db);
+}
+
+function getStructureRepo(): StructureRepository {
+    const db = getDb(resolveConsolidatedDbPath());
+    return new StructureRepository(db);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// WORLDGEN → PERSISTED-SCHEMA MAPPING (#64)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Explicit biome → RegionSchema.type mapping. The worldgen Region carries a
+ * dominant BiomeType, but the persisted RegionSchema constrains `type` to a small
+ * gameplay enum. This table is intentionally exhaustive over BiomeType; the
+ * `?? 'wilderness'` fallback below NEVER silently coerces an unknown biome — it is
+ * only a defensive default if a NEW BiomeType is added without updating this table.
+ */
+const BIOME_TO_REGION_TYPE: Partial<Record<BiomeType, Region['type']>> = {
+    [BiomeType.GRASSLAND]: 'plains',
+    [BiomeType.SAVANNA]: 'plains',
+    [BiomeType.FOREST]: 'forest',
+    [BiomeType.RAINFOREST]: 'forest',
+    [BiomeType.TAIGA]: 'forest',
+    [BiomeType.DESERT]: 'desert',
+    [BiomeType.LAKE]: 'water',
+    [BiomeType.OCEAN]: 'water',
+    [BiomeType.DEEP_OCEAN]: 'water',
+    [BiomeType.SWAMP]: 'wilderness',
+    [BiomeType.TUNDRA]: 'wilderness',
+    [BiomeType.GLACIER]: 'wilderness',
+};
+
+/**
+ * Deterministic region color: a pure function of the region type so the same
+ * generated world always persists identical colors (no randomUUID, no Date).
+ */
+const REGION_TYPE_COLOR: Record<Region['type'], string> = {
+    kingdom: '#c0392b',
+    duchy: '#8e44ad',
+    county: '#2980b9',
+    wilderness: '#27ae60',
+    water: '#2c82c9',
+    plains: '#9acd32',
+    forest: '#228b22',
+    mountain: '#7f8c8d',
+    desert: '#e1b16a',
+    city: '#bdc3c7',
+};
+
+/**
+ * Deterministic structure population by type. The worldgen StructureLocation has
+ * no population, but the persisted StructureSchema REQUIRES a nonnegative number,
+ * so we assign a fixed, pure-function population per type (no randomness/clock).
+ */
+function structurePopulationFor(type: StructureType): number {
+    switch (type) {
+        case StructureType.CITY: return 5000;
+        case StructureType.TOWN: return 1000;
+        case StructureType.VILLAGE: return 200;
+        case StructureType.CASTLE: return 500;
+        case StructureType.TEMPLE: return 100;
+        case StructureType.RUINS: return 0;
+        case StructureType.DUNGEON: return 0;
+        default: return 0;
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -257,6 +333,55 @@ async function handleGenerate(args: z.infer<typeof GenerateSchema>): Promise<obj
     // also uses, so a generate→use sequence hits the cache instead of regenerating. (#61)
     worldManager.create(world.id, generatedWorld);
 
+    // Persist generated regions + structures to the SAME db so strategy_manage and
+    // other consumers can read them. Previously only the world row + in-memory copy
+    // were written, so regionRepo.findByWorldId returned [] and claim_region failed
+    // with "Region not found" for every generated world. (#64)
+    const now2 = new Date().toISOString();
+
+    // Regions: map worldgen Region (numeric id, BiomeType, capital{x,y}) onto the
+    // persisted RegionSchema (string id, gameplay type enum, centerX/Y, color, ...).
+    const persistedRegions: Region[] = generatedWorld.regions.map((region) => {
+        // `?? 'wilderness'` is a defensive default for an unmapped BiomeType only;
+        // every current BiomeType is covered by BIOME_TO_REGION_TYPE above.
+        const type = BIOME_TO_REGION_TYPE[region.biome] ?? 'wilderness';
+        return {
+            id: `${world.id}-region-${region.id}`,
+            worldId: world.id,
+            name: region.name,
+            type,
+            centerX: region.capital.x,
+            centerY: region.capital.y,
+            color: REGION_TYPE_COLOR[type],
+            controlLevel: 0,
+            createdAt: now2,
+            updatedAt: now2,
+        };
+    });
+    getRegionRepo().createBatch(persistedRegions);
+
+    // Structures: map worldgen StructureLocation onto the persisted StructureSchema.
+    // regionMap[y*width+x] holds the numeric region id for that tile (-1 if none);
+    // link to the matching persisted region id when present.
+    const persistedStructures: Structure[] = generatedWorld.structures.map((s, i) => {
+        const { x, y } = s.location;
+        const regionNum = generatedWorld.regionMap[y * world.width + x];
+        const regionId = regionNum >= 0 ? `${world.id}-region-${regionNum}` : undefined;
+        return {
+            id: `${world.id}-structure-${i}`,
+            worldId: world.id,
+            regionId,
+            name: s.name,
+            type: s.type,
+            x,
+            y,
+            population: structurePopulationFor(s.type),
+            createdAt: now2,
+            updatedAt: now2,
+        };
+    });
+    getStructureRepo().createBatch(persistedStructures);
+
     // Calculate biome stats from 2D biomes array
     const biomeStats: Record<string, number> = {};
     for (let y = 0; y < generatedWorld.biomes.length; y++) {
@@ -276,6 +401,8 @@ async function handleGenerate(args: z.infer<typeof GenerateSchema>): Promise<obj
         dimensions: { width: args.width, height: args.height },
         tileCount: tileCount,
         regionCount: generatedWorld.regions.length,
+        // #64: surface the count of persisted structures alongside regionCount.
+        structureCount: persistedStructures.length,
         biomeDistribution: biomeStats,
         message: `Generated ${args.width}x${args.height} world with ${generatedWorld.regions.length} regions`
     };
