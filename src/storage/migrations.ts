@@ -891,6 +891,31 @@ function runMigrations(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_achievements_category ON achievements(category);
   `);
 
+  // PHASE-3: Add reputation column (per-character faction reputation map, keyed
+  // by factionId -> {value}). Guarded ALTER for the same reason as the skills /
+  // achievements columns above: the base characters table does not list it, so
+  // an unguarded ALTER would throw 'duplicate column' on a re-run. Nullable for
+  // back-compat (defaults-on-read to {} at the tool layer; a missing faction
+  // entry == value 0 / "Neutral").
+  const hasReputation = charColumns.some(col => col.name === 'reputation');
+  if (!hasReputation) {
+    console.error('[Migration] Adding reputation column to characters table');
+    db.exec(`ALTER TABLE characters ADD COLUMN reputation TEXT;`);
+  }
+
+  // PHASE-3: Faction catalog (global definitions). Created here (in the
+  // migrations pass, not the base CREATE block) so existing databases gain it on
+  // next boot. Per-character reputation VALUES live on the character row's
+  // `reputation` JSON column above; this table owns ONLY the definitions.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS factions(
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT,
+      created_at TEXT
+    );
+  `);
+
   // PHASE-3: Add skill_requirements column to quests for skill-gated assign.
   // Guarded ALTER for the same reason; defaults to '[]' so existing quests
   // remain ungated.

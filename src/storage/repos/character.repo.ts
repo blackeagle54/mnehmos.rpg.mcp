@@ -16,13 +16,13 @@ export class CharacterRepository {
                               cantrips_known, max_spell_level, concentrating_on, conditions,
                               legendary_actions, legendary_actions_remaining, legendary_resistances,
                               legendary_resistances_remaining, has_lair_actions, resistances, vulnerabilities, immunities,
-                              current_room_id, perception_bonus, stealth_bonus, skills, achievements, created_at, updated_at)
+                              current_room_id, perception_bonus, stealth_bonus, skills, achievements, reputation, created_at, updated_at)
       VALUES (@id, @name, @stats, @hp, @maxHp, @ac, @level, @xp, @factionId, @behavior, @characterType,
               @characterClass, @race, @spellSlots, @pactMagicSlots, @knownSpells, @preparedSpells,
               @cantripsKnown, @maxSpellLevel, @concentratingOn, @conditions,
               @legendaryActions, @legendaryActionsRemaining, @legendaryResistances,
               @legendaryResistancesRemaining, @hasLairActions, @resistances, @vulnerabilities, @immunities,
-              @currentRoomId, @perceptionBonus, @stealthBonus, @skills, @achievements, @createdAt, @updatedAt)
+              @currentRoomId, @perceptionBonus, @stealthBonus, @skills, @achievements, @reputation, @createdAt, @updatedAt)
     `);
 
         stmt.run({
@@ -66,6 +66,8 @@ export class CharacterRepository {
             skills: validChar.skills ? JSON.stringify(validChar.skills) : null,
             // PHASE-3: per-character achievement unlock/progress (null for legacy rows)
             achievements: validChar.achievements ? JSON.stringify(validChar.achievements) : null,
+            // PHASE-3: per-character faction reputation map (null for legacy rows)
+            reputation: validChar.reputation ? JSON.stringify(validChar.reputation) : null,
             createdAt: validChar.createdAt,
             updatedAt: validChar.updatedAt,
         });
@@ -123,7 +125,7 @@ export class CharacterRepository {
                 legendary_actions = ?, legendary_actions_remaining = ?,
                 legendary_resistances = ?, legendary_resistances_remaining = ?,
                 has_lair_actions = ?, resistances = ?, vulnerabilities = ?, immunities = ?,
-                current_room_id = ?, perception_bonus = ?, stealth_bonus = ?, skills = ?, achievements = ?, updated_at = ?
+                current_room_id = ?, perception_bonus = ?, stealth_bonus = ?, skills = ?, achievements = ?, reputation = ?, updated_at = ?
             WHERE id = ?
         `);
 
@@ -167,6 +169,8 @@ export class CharacterRepository {
             validChar.skills ? JSON.stringify(validChar.skills) : null,
             // PHASE-3: per-character achievement unlock/progress (null for legacy rows)
             validChar.achievements ? JSON.stringify(validChar.achievements) : null,
+            // PHASE-3: per-character faction reputation map (null for legacy rows)
+            validChar.reputation ? JSON.stringify(validChar.reputation) : null,
             validChar.updatedAt,
             id
         );
@@ -220,6 +224,8 @@ export class CharacterRepository {
             skills: row.skills ? JSON.parse(row.skills) : undefined,
             // PHASE-3: achievement unlock/progress — undefined for legacy rows (back-compat)
             achievements: row.achievements ? JSON.parse(row.achievements) : undefined,
+            // PHASE-3: faction reputation map — undefined for legacy rows (back-compat)
+            reputation: row.reputation ? JSON.parse(row.reputation) : undefined,
             createdAt: row.created_at,
             updatedAt: row.updated_at,
         };
@@ -277,6 +283,8 @@ interface CharacterRow {
     skills?: string | null;
     // PHASE-3: achievement unlock/progress (JSON or null for legacy rows)
     achievements?: string | null;
+    // PHASE-3: faction reputation map (JSON or null for legacy rows)
+    reputation?: string | null;
     created_at: string;
     updated_at: string;
 }

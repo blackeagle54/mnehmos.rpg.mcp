@@ -1,7 +1,7 @@
 /**
  * Consolidated Tools Index
  *
- * Exports all 30 consolidated tools for the v1.0 clean-break release.
+ * Exports all 31 consolidated tools for the v1.0 clean-break release.
  * Each tool uses action-based routing with fuzzy matching and guiding errors.
  */
 
@@ -35,6 +35,7 @@ export { SpatialManageTool, handleSpatialManage } from './spatial-manage.js';
 export { QuestManageTool, handleQuestManage } from './quest-manage.js';
 export { SkillManageTool, handleSkillManage } from './skill-manage.js';
 export { AchievementManageTool, handleAchievementManage } from './achievement-manage.js';
+export { ReputationManageTool, handleReputationManage } from './reputation-manage.js';
 export { NpcManageTool, handleNpcManage } from './npc-manage.js';
 export { AuraManageTool, handleAuraManage } from './aura-manage.js';
 export { TheftManageTool, handleTheftManage } from './theft-manage.js';
@@ -73,6 +74,7 @@ import { SpatialManageTool, handleSpatialManage } from './spatial-manage.js';
 import { QuestManageTool, handleQuestManage } from './quest-manage.js';
 import { SkillManageTool, handleSkillManage } from './skill-manage.js';
 import { AchievementManageTool, handleAchievementManage } from './achievement-manage.js';
+import { ReputationManageTool, handleReputationManage } from './reputation-manage.js';
 import { NpcManageTool, handleNpcManage } from './npc-manage.js';
 import { AuraManageTool, handleAuraManage } from './aura-manage.js';
 import { TheftManageTool, handleTheftManage } from './theft-manage.js';
@@ -105,6 +107,7 @@ export const ConsolidatedTools = [
     { tool: QuestManageTool, handler: handleQuestManage },
     { tool: SkillManageTool, handler: handleSkillManage },
     { tool: AchievementManageTool, handler: handleAchievementManage },
+    { tool: ReputationManageTool, handler: handleReputationManage },
     { tool: NpcManageTool, handler: handleNpcManage },
     { tool: AuraManageTool, handler: handleAuraManage },
     { tool: TheftManageTool, handler: handleTheftManage },
