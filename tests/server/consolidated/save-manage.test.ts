@@ -513,6 +513,200 @@ describe('save_manage consolidated tool', () => {
         });
     });
 
+    describe('import hardening (untrusted bundle)', () => {
+        // ── Fix 1: SQL injection via untrusted column keys ──────────────────
+        it('rejects a row whose column key is an injection payload and writes nothing', async () => {
+            const seed = seedCampaign(db);
+            const exported = parseResult(
+                await handleSaveManage({ action: 'export', worldId: seed.worldId }, ctx)
+            );
+
+            // Wipe to a fresh DB so a successful injection would be observable.
+            closeDb();
+            db = getDb(':memory:');
+            const before = rowCounts(db);
+
+            // Craft a malicious column key on a world row. A naive INSERT that
+            // interpolates Object.keys(row) would emit SQL that drops a table.
+            const bundle = JSON.parse(JSON.stringify(exported.bundle));
+            bundle.worlds[0]['id") VALUES ("x"); DROP TABLE characters; --'] = 'pwned';
+
+            const data = parseResult(
+                await handleSaveManage({ action: 'import', bundle }, ctx)
+            );
+            expect(data.error).toBe(true);
+            expect(typeof data.message).toBe('string');
+            // No partial write — and the characters table must still exist.
+            expect(rowCounts(db)).toEqual(before);
+            expect(() => db.prepare('SELECT COUNT(*) FROM characters').get()).not.toThrow();
+        });
+
+        it('rejects a row with an unknown-but-harmless column not in the table schema', async () => {
+            const seed = seedCampaign(db);
+            const exported = parseResult(
+                await handleSaveManage({ action: 'export', worldId: seed.worldId }, ctx)
+            );
+
+            closeDb();
+            db = getDb(':memory:');
+            const before = rowCounts(db);
+
+            // A perfectly-named identifier that simply is not a column on `worlds`.
+            const bundle = JSON.parse(JSON.stringify(exported.bundle));
+            bundle.worlds[0]['totally_made_up_column'] = 'nope';
+
+            const data = parseResult(
+                await handleSaveManage({ action: 'import', bundle }, ctx)
+            );
+            expect(data.error).toBe(true);
+            expect(rowCounts(db)).toEqual(before);
+        });
+
+        it('still round-trips a normal valid bundle after hardening', async () => {
+            const seed = seedCampaign(db);
+            const exported = parseResult(
+                await handleSaveManage({ action: 'export', worldId: seed.worldId }, ctx)
+            );
+            const before = rowCounts(db);
+
+            closeDb();
+            db = getDb(':memory:');
+
+            const data = parseResult(
+                await handleSaveManage({ action: 'import', bundle: exported.bundle }, ctx)
+            );
+            expect(data.success).toBe(true);
+            expect(rowCounts(db)).toEqual(before);
+        });
+
+        // ── Fix 2: schemaVersion reconciliation ─────────────────────────────
+        it('rejects when declared version differs from the bundle version and writes nothing', async () => {
+            const seed = seedCampaign(db);
+            const exported = parseResult(
+                await handleSaveManage({ action: 'export', worldId: seed.worldId }, ctx)
+            );
+
+            closeDb();
+            db = getDb(':memory:');
+            const before = rowCounts(db);
+
+            // Bundle says v1, caller declares v2 → genuine mismatch.
+            const data = parseResult(
+                await handleSaveManage(
+                    { action: 'import', bundle: exported.bundle, schemaVersion: 2 },
+                    ctx
+                )
+            );
+            expect(data.error).toBe(true);
+            expect(data.message).toContain('mismatch');
+            expect(rowCounts(db)).toEqual(before);
+        });
+
+        it('rejects an unsupported bundle version and writes nothing', async () => {
+            closeDb();
+            db = getDb(':memory:');
+            const before = rowCounts(db);
+
+            const data = parseResult(
+                await handleSaveManage(
+                    {
+                        action: 'import',
+                        bundle: { schemaVersion: 99, worlds: [{ id: 'w1', name: 'X', seed: 's' }] },
+                    },
+                    ctx
+                )
+            );
+            expect(data.error).toBe(true);
+            expect(rowCounts(db)).toEqual(before);
+        });
+
+        // ── Fix 3: exactly one world row ────────────────────────────────────
+        it('rejects a bundle with zero worlds', async () => {
+            closeDb();
+            db = getDb(':memory:');
+            const before = rowCounts(db);
+
+            const data = parseResult(
+                await handleSaveManage(
+                    { action: 'import', bundle: { schemaVersion: 1, worlds: [] } },
+                    ctx
+                )
+            );
+            expect(data.error).toBe(true);
+            expect(rowCounts(db)).toEqual(before);
+        });
+
+        it('rejects a bundle with more than one world', async () => {
+            const seedA = seedCampaign(db);
+            seedCampaign(db);
+            const exportedA = parseResult(
+                await handleSaveManage({ action: 'export', worldId: seedA.worldId }, ctx)
+            );
+
+            closeDb();
+            db = getDb(':memory:');
+            const before = rowCounts(db);
+
+            // Duplicate the single world into two distinct rows.
+            const bundle = JSON.parse(JSON.stringify(exportedA.bundle));
+            const second = JSON.parse(JSON.stringify(bundle.worlds[0]));
+            second.id = randomUUID();
+            bundle.worlds.push(second);
+
+            const data = parseResult(
+                await handleSaveManage({ action: 'import', bundle }, ctx)
+            );
+            expect(data.error).toBe(true);
+            expect(rowCounts(db)).toEqual(before);
+        });
+
+        // ── Fix 4: required primary-key columns present before any write ────
+        it('rejects a row missing its primary key and writes nothing', async () => {
+            const seed = seedCampaign(db);
+            const exported = parseResult(
+                await handleSaveManage({ action: 'export', worldId: seed.worldId }, ctx)
+            );
+
+            closeDb();
+            db = getDb(':memory:');
+            const before = rowCounts(db);
+
+            // Strip the world's primary key — the import must reject pre-write.
+            const bundle = JSON.parse(JSON.stringify(exported.bundle));
+            delete bundle.worlds[0].id;
+
+            const data = parseResult(
+                await handleSaveManage({ action: 'import', bundle }, ctx)
+            );
+            expect(data.error).toBe(true);
+            expect(data.message).toContain('primary key');
+            expect(rowCounts(db)).toEqual(before);
+        });
+
+        it('rejects a composite-pk child row missing one pk column and writes nothing', async () => {
+            const seed = seedCampaign(db);
+            const exported = parseResult(
+                await handleSaveManage({ action: 'export', worldId: seed.worldId }, ctx)
+            );
+
+            closeDb();
+            db = getDb(':memory:');
+            const before = rowCounts(db);
+
+            // inventory_items has composite pk (character_id, item_id); drop one.
+            const bundle = JSON.parse(JSON.stringify(exported.bundle));
+            expect(bundle.inventory_items.length).toBeGreaterThan(0);
+            delete bundle.inventory_items[0].item_id;
+
+            const data = parseResult(
+                await handleSaveManage({ action: 'import', bundle }, ctx)
+            );
+            expect(data.error).toBe(true);
+            expect(data.message).toContain('primary key');
+            expect(rowCounts(db)).toEqual(before);
+        });
+    });
+
     describe('output formatting', () => {
         it('embeds a parseable SAVE_MANAGE_JSON marker', async () => {
             const seed = seedCampaign(db);

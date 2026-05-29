@@ -271,9 +271,16 @@ function validateBundle(bundle: unknown, declaredVersion?: number): { ok: true; 
     }
     const b = bundle as Record<string, unknown>;
 
-    // schemaVersion: trust the bundle's own field first, fall back to the
-    // explicit arg; either way it MUST equal the supported version.
-    const version = (typeof b.schemaVersion === 'number' ? b.schemaVersion : declaredVersion);
+    // schemaVersion reconciliation: the bundle carries its OWN version and the
+    // caller MAY declare an expected one. If BOTH are present and disagree, that
+    // is a genuine mismatch we must surface (the old code silently let the
+    // bundle's field win). When only one is present, that one is authoritative;
+    // either way the resolved version MUST equal the build's SCHEMA_VERSION.
+    const bundleVersion = (typeof b.schemaVersion === 'number' ? b.schemaVersion : undefined);
+    if (declaredVersion !== undefined && bundleVersion !== undefined && declaredVersion !== bundleVersion) {
+        return { ok: false, message: `schemaVersion mismatch: bundle=${bundleVersion}, expected=${declaredVersion}` };
+    }
+    const version = bundleVersion ?? declaredVersion;
     if (version !== SCHEMA_VERSION) {
         return {
             ok: false,
@@ -281,16 +288,18 @@ function validateBundle(bundle: unknown, declaredVersion?: number): { ok: true; 
         };
     }
 
-    // worlds is the campaign root and must be a non-empty array.
+    // A single-campaign bundle must carry EXACTLY one world (the campaign root).
+    // Zero worlds = nothing to restore; more than one = an ambiguous multi-world
+    // blob this single-campaign import path does not support.
     const worldsParse = RowArraySchema.safeParse(b.worlds);
-    if (!worldsParse.success || worldsParse.data.length === 0) {
-        return { ok: false, message: 'Bundle.worlds must be a non-empty array' };
+    if (!worldsParse.success || worldsParse.data.length !== 1) {
+        return { ok: false, message: 'Bundle.worlds must contain exactly one world row' };
     }
 
     // Every PRESENT table key must be an array of row objects. Absent keys
     // default to [] (a bundle need not carry empty tables).
     const tables: Record<string, Row[]> = {};
-    for (const { key } of BUNDLE_TABLES) {
+    for (const { key, pk } of BUNDLE_TABLES) {
         if (b[key] === undefined) {
             tables[key] = [];
             continue;
@@ -299,20 +308,73 @@ function validateBundle(bundle: unknown, declaredVersion?: number): { ok: true; 
         if (!parsed.success) {
             return { ok: false, message: `Bundle.${key} must be an array of rows` };
         }
-        tables[key] = parsed.data as Row[];
+        const rows = parsed.data as Row[];
+
+        // Reject any row missing a required PRIMARY KEY column BEFORE any write.
+        // A row that lacks its pk cannot be a valid upsert target; without this
+        // guard the row would only fail deep inside the transaction with an
+        // opaque NOT NULL / FOREIGN KEY error (or, worse, silently insert under a
+        // NULL key). Catching it here keeps the failure explicit and pre-write.
+        for (const row of rows) {
+            for (const pkCol of pk) {
+                const v = row[pkCol];
+                if (v === undefined || v === null) {
+                    return { ok: false, message: `Bundle.${key} row missing required primary key "${pkCol}"` };
+                }
+            }
+        }
+
+        tables[key] = rows;
     }
 
     return { ok: true, tables };
 }
 
 /**
+ * A SQL identifier we are willing to interpolate into a statement. SQLite
+ * identifiers can technically be far more permissive when double-quoted, but a
+ * save bundle is UNTRUSTED, hand-editable input, so we accept ONLY the ordinary
+ * `[A-Za-z_][A-Za-z0-9_]*` shape and reject anything else outright. This blocks
+ * an attacker from smuggling a crafted column key (e.g. one carrying embedded
+ * quotes / statement terminators) into the INSERT we build.
+ */
+const SAFE_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+function assertSafeIdentifier(id: string, role: string): void {
+    if (!SAFE_IDENTIFIER.test(id)) {
+        throw new Error(`Invalid ${role} "${id}" — not a valid SQL identifier`);
+    }
+}
+
+/**
  * Upsert one row verbatim into `table`, keying the ON CONFLICT on `pk`. Column
- * names come from the row itself, so the write mirrors whatever export read —
- * no per-table column list to drift from the schema.
+ * names come from the (untrusted) bundle row, so before interpolating any of
+ * them into SQL we (1) require each to match SAFE_IDENTIFIER and (2) whitelist
+ * it against the table's ACTUAL schema via PRAGMA table_info — a column the
+ * table does not declare (or any injection-shaped key) is rejected with a throw.
+ * The caller runs this INSIDE the import transaction, so the throw rolls the
+ * whole import back (no partial write). The `table` and `pk` identifiers come
+ * from the internal BUNDLE_TABLES, but we validate them too for defense in depth.
  */
 function upsertRow(db: Database.Database, table: string, pk: string[], row: Row): void {
     const cols = Object.keys(row);
     if (cols.length === 0) return;
+
+    // Defense in depth: validate the (internal) table + pk identifiers too.
+    assertSafeIdentifier(table, 'table');
+    for (const p of pk) assertSafeIdentifier(p, 'primary key column');
+
+    // Whitelist every bundle column against the table's real schema. PRAGMA
+    // table_info("<table>") is safe because `table` is validated above.
+    const tableCols = new Set(
+        (db.prepare(`PRAGMA table_info("${table}")`).all() as Array<{ name: string }>).map((c) => c.name)
+    );
+    for (const c of cols) {
+        assertSafeIdentifier(c, 'column');
+        if (!tableCols.has(c)) {
+            throw new Error(`Invalid column "${c}" for table "${table}"`);
+        }
+    }
 
     const colList = cols.map((c) => `"${c}"`).join(', ');
     const placeholders = cols.map((c) => `@${c}`).join(', ');
