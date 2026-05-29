@@ -8,6 +8,7 @@ import {
 } from './spell.js';
 import { SkillsSchema } from './skill.js';
 import { CharacterAchievementsSchema } from './achievement.js';
+import { CharacterReputationSchema } from './reputation.js';
 
 export const CharacterSchema = z.object({
     id: z.string(),
@@ -108,6 +109,12 @@ export const CharacterSchema = z.object({
     // as skills: legacy rows have no `achievements` column and must still parse;
     // the tool layer defaults-on-read to {}.
     achievements: CharacterAchievementsSchema.optional(),
+
+    // PHASE-3: per-character faction reputation map (sparse, keyed by factionId).
+    // .optional() is LOAD-BEARING for the same back-compat reason as achievements:
+    // legacy rows have no `reputation` column and must still parse; the tool layer
+    // defaults-on-read to {} (a missing faction entry == value 0 / "Neutral").
+    reputation: CharacterReputationSchema.optional(),
 
     createdAt: z.string().datetime(),
     updatedAt: z.string().datetime(),
