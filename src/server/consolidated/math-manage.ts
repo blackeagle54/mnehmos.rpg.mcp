@@ -18,6 +18,7 @@ import { resolveConsolidatedDbPath } from './db-path.js';
 import { ExportFormatSchema } from '../../math/schemas.js';
 import { randomUUID } from 'crypto';
 import type Database from 'better-sqlite3';
+import { ToolContract } from '../tool-metadata.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -297,6 +298,9 @@ const router = createActionRouter({
 
 export const MathManageTool = {
     name: 'math_manage',
+    category: 'math',
+    keywords: ['dice', 'roll', 'probability', 'algebra', 'physics', 'math'],
+    capabilities: ['Dice rolling', 'Probability', 'Math operations'],
     description: `Mathematical operations for RPG mechanics.
 
 ⚠️ REDIRECT - DO NOT USE FOR:
@@ -358,7 +362,7 @@ Actions: roll, probability, solve, simplify, projectile`,
         // Common
         exportFormat: z.enum(['json', 'plaintext', 'markdown', 'latex']).optional()
     })
-};
+} satisfies ToolContract;
 
 export async function handleMathManage(args: unknown, ctx: SessionContext): Promise<McpResponse> {
     // Pass sessionId to handlers

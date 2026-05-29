@@ -14,6 +14,7 @@ import { CharacterRepository } from '../../storage/repos/character.repo.js';
 import { getCombatManager } from '../state/combat-manager.js';
 import { restoreAllSpellSlots, restorePactSlots, getSpellcastingConfig } from '../../engine/magic/spell-validator.js';
 import { createActionRouter, ActionDefinition, McpResponse } from '../../utils/action-router.js';
+import { ToolContract } from '../tool-metadata.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -230,6 +231,9 @@ const router = createActionRouter({
 
 export const RestManageTool = {
     name: 'rest_manage',
+    category: 'rest',
+    keywords: ['rest', 'long', 'short', 'heal', 'recovery', 'hit dice'],
+    capabilities: ['Long/short rest processing', 'HP restoration', 'Hit dice management'],
     description: `Manage character rest mechanics (D&D 5e style).
 
 ⏰ REST TYPES:
@@ -252,7 +256,7 @@ Aliases: long_rest/full→long, short_rest/quick→short`,
         hitDiceToSpend: z.number().int().min(0).max(20).optional()
             .describe('For short rest: hit dice to spend (default: 1)')
     })
-};
+} satisfies ToolContract;
 
 export async function handleRestManage(args: unknown, _ctx: SessionContext): Promise<McpResponse> {
     return router(args as Record<string, unknown>);

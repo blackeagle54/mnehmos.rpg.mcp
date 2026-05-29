@@ -18,6 +18,7 @@ import { ConflictResolver } from '../../engine/strategy/conflict-resolver.js';
 import { TurnProcessor } from '../../engine/strategy/turn-processor.js';
 import { FogOfWar } from '../../engine/strategy/fog-of-war.js';
 import { randomUUID } from 'crypto';
+import { ToolContract } from '../tool-metadata.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -353,6 +354,9 @@ const router = createActionRouter({
 
 export const StrategyManageTool = {
     name: 'strategy_manage',
+    category: 'strategy',
+    keywords: ['nation', 'alliance', 'territory', 'strategy', 'diplomacy'],
+    capabilities: ['Nation management', 'Diplomacy', 'Territory'],
     description: `Grand strategy nation management for multi-agent games.
 
 🏰 NATION SETUP:
@@ -409,7 +413,7 @@ Actions: create_nation, get_state, propose_alliance, claim_region, resolve_turn,
         // Turn params
         turnNumber: z.number().optional()
     })
-};
+} satisfies ToolContract;
 
 export async function handleStrategyManage(args: unknown, _ctx: SessionContext): Promise<McpResponse> {
     const result = await router(args as Record<string, unknown>);

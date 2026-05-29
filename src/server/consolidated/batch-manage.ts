@@ -15,6 +15,7 @@ import { InventoryRepository } from '../../storage/repos/inventory.repo.js';
 import { ItemRepository } from '../../storage/repos/item.repo.js';
 import { SessionContext } from '../types.js';
 import { buildConsolidatedRegistry } from '../consolidated-registry.js';
+import { ToolContract } from '../tool-metadata.js';
 
 export interface McpResponse {
     content: Array<{ type: 'text'; text: string }>;
@@ -821,6 +822,9 @@ export async function handleBatchManage(args: unknown, _ctx: SessionContext): Pr
 // Tool definition for registration
 export const BatchManageTool = {
     name: 'batch_manage',
+    category: 'meta',
+    keywords: ['batch', 'bulk', 'create', 'workflow', 'template'],
+    capabilities: ['Bulk character creation', 'Workflows', 'Templates'],
     description: `Consolidated batch operations (7 actions).
 
 🔗 WORKFLOW ORCHESTRATION:
@@ -844,4 +848,4 @@ Examples:
 - Create party: { action: "create_characters", characters: [{ name: "Valeros", class: "Fighter" }] }
 - Populate village: { action: "create_npcs", locationName: "Thornwood", npcs: [{ name: "Marta", role: "Innkeeper" }] }`,
     inputSchema: BatchManageInputSchema
-};
+} satisfies ToolContract;

@@ -14,6 +14,7 @@ import { getDb } from '../../storage/index.js';
 import { resolveConsolidatedDbPath } from './db-path.js';
 import { CustomEffectsRepository } from '../../storage/repos/custom-effects.repo.js';
 import { CharacterRepository } from '../../storage/repos/character.repo.js';
+import { ToolContract } from '../tool-metadata.js';
 import {
     WILD_SURGE_TABLE,
     SKILL_TO_ABILITY,
@@ -675,6 +676,9 @@ const router = createActionRouter({
 
 export const ImprovisationManageTool = {
     name: 'improvisation_manage',
+    category: 'improvisation',
+    keywords: ['stunt', 'improvise', 'creative', 'effect', 'homebrew'],
+    capabilities: ['Stunts', 'Custom effects', 'Arcane synthesis'],
     description: `Manage improvised actions, custom effects, and arcane synthesis.
 Actions: stunt, apply_effect, get_effects, remove_effect, process_triggers, advance_durations, synthesize, get_spellbook
 Aliases: rule_of_cool->stunt, boon/curse->apply_effect, dispel->remove_effect, arcane_synthesis->synthesize
@@ -760,7 +764,7 @@ ARCANE SYNTHESIS:
         circumstanceModifiers: z.array(z.string()).optional(),
         characterId: z.string().optional()
     })
-};
+} satisfies ToolContract;
 
 export async function handleImprovisationManage(args: unknown, _ctx: SessionContext): Promise<McpResponse> {
     const result = await router(args as Record<string, unknown>);

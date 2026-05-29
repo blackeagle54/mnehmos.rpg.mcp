@@ -24,6 +24,25 @@ export interface ToolMetadata {
   deferLoading: boolean;
 }
 
+/**
+ * ToolContract — the single source of truth a consolidated tool declares for
+ * itself (ADR-001 Phase 1, #13). The registry derives ToolMetadata FROM this,
+ * so discovery metadata (category/keywords/capabilities) lives next to the
+ * tool's name/description/inputSchema rather than in parallel maps.
+ *
+ * Each tool literal in src/server/consolidated/*.ts uses `satisfies ToolContract`
+ * so a missing/misspelled field — or a category not in the ToolCategory union —
+ * is a compile error.
+ */
+export interface ToolContract {
+  name: string;
+  description: string;
+  category: ToolCategory;
+  keywords: string[];
+  capabilities: string[];
+  inputSchema: any; // Zod schema (kept `any` to match existing untyped literals)
+}
+
 export interface ToolRegistryEntry {
   metadata: ToolMetadata;
   schema: any; // Zod schema

@@ -67,6 +67,7 @@ function generateEncounterMap(encounterData: { state: { tokens?: Array<{ positio
 import { parsePosition } from '../../utils/schema-shorthand.js';
 import { ENCOUNTER_PRESETS, EncounterPreset, getEncountersByTag, getEncountersForLevel, scaleEncounter } from '../../data/encounter-presets.js';
 import { Character } from '../../schema/character.js';
+import { ToolContract } from '../tool-metadata.js';
 
 // Helper function to build a complete Character object
 function buildCharacter(data: {
@@ -1113,6 +1114,9 @@ export async function handleSpawnManage(args: unknown, ctx: SessionContext): Pro
 // Tool definition for registration
 export const SpawnManageTool = {
     name: 'spawn_manage',
+    category: 'world',
+    keywords: ['spawn', 'create', 'encounter', 'location', 'tactical'],
+    capabilities: ['Spawn characters', 'Create locations', 'Generate encounters'],
     description: `Create game entities from templates - characters, locations, encounters.
 
 🎯 QUICK START:
@@ -1137,4 +1141,4 @@ Terrain patterns: arena, canyon, river_valley, mountain_pass, maze
 
 Actions: spawn_character, spawn_location, spawn_encounter, spawn_preset_location, spawn_tactical, spawn_quick_enemy`,
     inputSchema: SpawnManageInputSchema
-};
+} satisfies ToolContract;

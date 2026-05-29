@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { createActionRouter, ActionDefinition, McpResponse } from '../../utils/action-router.js';
 import { SessionContext } from '../types.js';
 import { RichFormatter } from '../utils/formatter.js';
+import { ToolContract } from '../tool-metadata.js';
 import {
     handleGetWorldMapOverview,
     handleGetRegionMap,
@@ -228,6 +229,9 @@ const router = createActionRouter({
 
 export const WorldMapTool = {
     name: 'world_map',
+    category: 'world',
+    keywords: ['map', 'overview', 'region', 'patch', 'tiles'],
+    capabilities: ['Map overview', 'Region details', 'Tile patching'],
     description: `World map operations - viewing, rendering, and modification.
 Actions: overview, region, tiles, patch, preview, find_poi, suggest_poi
 Aliases: summary→overview, grid→tiles, apply→patch, dry_run→preview, locate→find_poi
@@ -254,7 +258,7 @@ For world creation/management, use world_manage tool instead.`,
         count: z.number().optional(),
         requests: z.array(z.any()).optional()
     })
-};
+} satisfies ToolContract;
 
 export async function handleWorldMap(args: unknown, ctx: SessionContext): Promise<McpResponse> {
     // Thread the per-request session context explicitly through the router (#14).

@@ -14,6 +14,7 @@ import { getDb } from '../../storage/index.js';
 import { resolveConsolidatedDbPath } from './db-path.js';
 import { TheftRepository } from '../../storage/repos/theft.repo.js';
 import { HeatLevelSchema, HEAT_VALUES, compareHeatLevels, HeatLevel } from '../../schema/theft.js';
+import { ToolContract } from '../tool-metadata.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -468,6 +469,9 @@ const router = createActionRouter({
 
 export const TheftManageTool = {
     name: 'theft_manage',
+    category: 'theft',
+    keywords: ['theft', 'steal', 'fence', 'crime', 'recognition', 'heat'],
+    capabilities: ['Theft attempts', 'Fence operations', 'Heat tracking'],
     description: `Manage theft mechanics, stolen items, and fence NPCs.
 Actions: steal, check, search, recognize, sell, register_fence, report, decay, get_fence, list_fences
 Aliases: fence→sell, frisk→search, provenance→check
@@ -515,7 +519,7 @@ FENCE WORKFLOW:
         specializations: z.array(z.string()).optional(),
         cooldownDays: z.number().optional()
     })
-};
+} satisfies ToolContract;
 
 export async function handleTheftManage(args: unknown, _ctx: SessionContext): Promise<McpResponse> {
     const result = await router(args as Record<string, unknown>);

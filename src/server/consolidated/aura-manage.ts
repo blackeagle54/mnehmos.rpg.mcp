@@ -27,6 +27,7 @@ import {
 import { startConcentration, breakConcentration } from '../../engine/magic/concentration.js';
 import { AuraTriggerSchema } from '../../schema/aura.js';
 import { Token } from '../../schema/encounter.js';
+import { ToolContract } from '../tool-metadata.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -401,6 +402,9 @@ const router = createActionRouter({
 
 export const AuraManageTool = {
     name: 'aura_manage',
+    category: 'aura',
+    keywords: ['aura', 'effect', 'radius', 'buff', 'debuff', 'area'],
+    capabilities: ['Create auras', 'Effect processing', 'Expiration'],
     description: `Manage area-effect auras (Spirit Guardians, Aura of Protection, etc.).
 Actions: create, list, get_affecting, process, remove, remove_by_owner, expire
 Aliases: new→create, active→list, affecting→get_affecting, trigger→process, end→remove
@@ -439,7 +443,7 @@ WORKFLOW:
         requiresConcentration: z.boolean().optional(),
         trigger: z.string().optional()
     })
-};
+} satisfies ToolContract;
 
 export async function handleAuraManage(args: unknown, _ctx: SessionContext): Promise<McpResponse> {
     const result = await router(args as Record<string, unknown>);

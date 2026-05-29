@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { createActionRouter, ActionDefinition, McpResponse } from '../../utils/action-router.js';
 import { SessionContext } from '../types.js';
 import { RichFormatter } from '../utils/formatter.js';
+import { ToolContract } from '../tool-metadata.js';
 import {
     handleLookAtSurroundings,
     handleGenerateRoomNode,
@@ -182,6 +183,9 @@ const router = createActionRouter({
 
 export const SpatialManageTool = {
     name: 'spatial_manage',
+    category: 'spatial',
+    keywords: ['room', 'look', 'move', 'exits', 'dungeon', 'space'],
+    capabilities: ['Room generation', 'Movement', 'Exit management'],
     description: `Manage spatial graph - rooms, exits, and character locations.
 Actions: look, generate, get_exits, move, list
 Aliases: observe→look, create→generate, exits→get_exits, enter→move, rooms→list
@@ -208,7 +212,7 @@ Biomes: forest, mountain, urban, dungeon, coastal, cavern, divine, arcane`,
         direction: DirectionEnum.optional(),
         biome: BiomeEnum.optional().describe('Filter biome (for list)')
     })
-};
+} satisfies ToolContract;
 
 export async function handleSpatialManage(args: unknown, ctx: SessionContext): Promise<McpResponse> {
     // Thread the per-request session context explicitly through the router (#14).

@@ -14,6 +14,7 @@ import { getDb } from '../../storage/index.js';
 import { resolveConsolidatedDbPath } from './db-path.js';
 import { EncounterRepository } from '../../storage/repos/encounter.repo.js';
 import { CombatEngine } from '../../engine/combat/engine.js';
+import { ToolContract } from '../tool-metadata.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -348,6 +349,9 @@ const router = createActionRouter({
 
 export const CombatActionTool = {
     name: 'combat_action',
+    category: 'combat',
+    keywords: ['attack', 'cast', 'move', 'action', 'damage', 'heal'],
+    capabilities: ['Attacks', 'Spell casting', 'Movement', 'Standard actions'],
     description: `Execute combat actions during an encounter. Actions: ${ACTIONS.join(', ')}.
 
 🎯 SELF-CONTAINED - This tool handles EVERYTHING for combat:
@@ -398,7 +402,7 @@ Aliases: hit/strike→attack, cast/spell→cast_spell, sprint→dash, evade→do
         readiedAction: z.string().optional().describe('Description of readied action'),
         trigger: z.string().optional().describe('Trigger for readied action')
     })
-};
+} satisfies ToolContract;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // HANDLER

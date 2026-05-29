@@ -26,6 +26,7 @@ import {
     rollArcanaCheck,
 } from '../../engine/magic/scroll.js';
 import { createActionRouter, ActionDefinition, McpResponse } from '../../utils/action-router.js';
+import { ToolContract } from '../tool-metadata.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTANTS & ENUMS
@@ -387,6 +388,9 @@ const router = createActionRouter({
 
 export const ScrollManageTool = {
     name: 'scroll_manage',
+    category: 'scroll',
+    keywords: ['scroll', 'spell', 'use', 'create', 'identify', 'arcana'],
+    capabilities: ['Use scrolls', 'Create scrolls', 'Check usability'],
     description: `Manage spell scrolls - D&D 5e rules for creation, identification, and usage.
 
 📜 SCROLL WORKFLOW:
@@ -421,7 +425,7 @@ Aliases: cast→use, craft→create, id→identify`,
         targetId: z.string().optional(),
         targetPoint: z.object({ x: z.number(), y: z.number() }).optional()
     })
-};
+} satisfies ToolContract;
 
 export async function handleScrollManage(args: unknown, _ctx: SessionContext): Promise<McpResponse> {
     return router(args as Record<string, unknown>);

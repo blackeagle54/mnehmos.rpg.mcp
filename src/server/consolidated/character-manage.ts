@@ -22,6 +22,7 @@ import { provisionStartingEquipment } from '../../services/starting-equipment.se
 import { getSpellSlots, isSpellcaster } from '../../data/class-starting-data.js';
 import { createActionRouter, ActionDefinition, McpResponse } from '../../utils/action-router.js';
 import { RichFormatter } from '../utils/formatter.js';
+import { ToolContract } from '../tool-metadata.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -552,6 +553,9 @@ const router = createActionRouter({
 
 export const CharacterManageTool = {
     name: 'character_manage',
+    category: 'character',
+    keywords: ['character', 'pc', 'npc', 'create', 'update', 'stats', 'level'],
+    capabilities: ['CRUD characters', 'Level up', 'Stats management'],
     description: `Manage characters and progression.
 
 👤 CHARACTER LIFECYCLE:
@@ -605,7 +609,7 @@ Aliases: new/add/spawn->create, fetch/find->get, modify/edit->update`,
         hpIncrease: z.number().int().optional(),
         targetLevel: z.number().int().optional()
     })
-};
+} satisfies ToolContract;
 
 export async function handleCharacterManage(args: unknown, _ctx: SessionContext): Promise<McpResponse> {
     const response = await router(args as Record<string, unknown>);
