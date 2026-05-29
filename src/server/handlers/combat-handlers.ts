@@ -6,16 +6,12 @@ import { SpatialEngine } from '../../engine/spatial/engine.js';
 import { PubSub } from '../../engine/pubsub.js';
 
 import { getCombatManager } from '../state/combat-manager.js';
-import { getDb } from '../../storage/index.js';
-import { EncounterRepository } from '../../storage/repos/encounter.repo.js';
+import { getCombatRepos, CombatRepos } from '../../services/combat-db.service.js';
 import { SessionContext } from '../types.js';
 
 // CRIT-006: Import spellcasting validation and resolution
 import { validateSpellCast, consumeSpellSlot } from '../../engine/magic/spell-validator.js';
 import { resolveSpell } from '../../engine/magic/spell-resolver.js';
-import { CharacterRepository } from '../../storage/repos/character.repo.js';
-import { ConcentrationRepository } from '../../storage/repos/concentration.repo.js';
-import { CombatActionLogRepository } from '../../storage/repos/combat-action-log.repo.js';
 import { startConcentration, checkConcentration, breakConcentration } from '../../engine/magic/concentration.js';
 import type { Character } from '../../schema/character.js';
 import { getPatternGenerator, PATTERN_DESCRIPTIONS } from '../terrain-patterns.js';
@@ -26,6 +22,26 @@ let pubsub: PubSub | null = null;
 
 export function setCombatPubSub(instance: PubSub) {
     pubsub = instance;
+}
+
+// ============================================================
+// COMBAT DB FACADE — DI SEAM (ADR-003 #15)
+// ------------------------------------------------------------
+// Combat handlers depend on the CombatRepos interface rather than opening the
+// DB directly. The default factory (getCombatRepos) resolves the DB via
+// resolveConsolidatedDbPath() — the #72 single source of truth — and builds the
+// four combat repos. setCombatRepos() lets tests inject a DB-free stub; tests
+// MUST call resetCombatRepos() in afterEach to avoid leaking a stub into sibling
+// combat tests sharing the same vitest fork.
+// ============================================================
+let combatReposFactory: () => CombatRepos = getCombatRepos;
+
+export function setCombatRepos(factory: () => CombatRepos) {
+    combatReposFactory = factory;
+}
+
+export function resetCombatRepos() {
+    combatReposFactory = getCombatRepos;
 }
 
 // ============================================================
@@ -41,8 +57,7 @@ export function setCombatPubSub(instance: PubSub) {
  * updated HP, we show that value in combat display.
  */
 function syncParticipantHpFromDb(state: CombatState): CombatState {
-    const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
-    const charRepo = new CharacterRepository(db);
+    const charRepo = combatReposFactory().characters;
 
     for (const participant of state.participants) {
         const character = charRepo.findById(participant.id);
@@ -1134,8 +1149,7 @@ export async function handleCreateEncounter(args: unknown, ctx: SessionContext) 
     getCombatManager().create(`${ctx.sessionId}:${encounterId}`, engine);
 
     // Persist initial state
-    const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
-    const repo = new EncounterRepository(db);
+    const repo = combatReposFactory().encounters;
 
     // Create the encounter record first (with initiative and isEnemy).
     // PR #57 follow-up: persist ac/attackDamage/attackBonus too — those drive
@@ -1202,8 +1216,7 @@ export async function handleGetEncounterState(args: unknown, ctx: SessionContext
 
     // Auto-load from database if not in memory
     if (!engine) {
-        const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
-        const repo = new EncounterRepository(db);
+        const repo = combatReposFactory().encounters;
         const state = repo.loadState(parsed.encounterId);
 
         if (!state) {
@@ -1253,8 +1266,7 @@ export async function handleExecuteCombatAction(args: unknown, ctx: SessionConte
 
     // Auto-load from database if not in memory
     if (!engine) {
-        const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
-        const repo = new EncounterRepository(db);
+        const repo = combatReposFactory().encounters;
         const state = repo.loadState(parsed.encounterId);
 
         if (!state) {
@@ -1335,8 +1347,7 @@ export async function handleExecuteCombatAction(args: unknown, ctx: SessionConte
             }
             // Third: try to load from character DB
             else {
-                const attackDb = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
-                const charRepo = new CharacterRepository(attackDb);
+                const charRepo = combatReposFactory().characters;
                 const character = charRepo.findById(parsed.actorId);
                 if (character?.stats) {
                     const strMod = Math.floor((character.stats.str - 10) / 2);
@@ -1371,8 +1382,7 @@ export async function handleExecuteCombatAction(args: unknown, ctx: SessionConte
             }
             // Second: try to load from character DB
             else {
-                const dmgDb = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
-                const dmgCharRepo = new CharacterRepository(dmgDb);
+                const dmgCharRepo = combatReposFactory().characters;
                 const character = dmgCharRepo.findById(parsed.actorId);
                 if (character?.stats) {
                     // Default damage: 1d8 + STR/DEX mod (simple weapon heuristic)
@@ -1411,8 +1421,7 @@ export async function handleExecuteCombatAction(args: unknown, ctx: SessionConte
 
         // Sync HP to character database after attack
         if (result.success && result.damage && result.damage > 0) {
-            const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
-            const charRepo = new CharacterRepository(db);
+            const charRepo = combatReposFactory().characters;
 
             // Get updated target HP from combat state and sync to character DB
             const updatedState = engine.getState();
@@ -1427,9 +1436,9 @@ export async function handleExecuteCombatAction(args: unknown, ctx: SessionConte
 
         // Check concentration if target took damage and is concentrating
         if (result.success && result.damage && result.damage > 0) {
-            const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
-            const concentrationRepo = new ConcentrationRepository(db);
-            const charRepo = new CharacterRepository(db);
+            const repos = combatReposFactory();
+            const concentrationRepo = repos.concentration;
+            const charRepo = repos.characters;
             const targetChar = charRepo.findById(parsed.targetId);
 
             if (targetChar && concentrationRepo.isConcentrating(parsed.targetId)) {
@@ -1446,7 +1455,7 @@ export async function handleExecuteCombatAction(args: unknown, ctx: SessionConte
 
             // D&D 5e Rule: Dropping to 0 HP automatically breaks concentration
             if (result.defeated && parsed.targetId) {
-                const concentrationRepo = new ConcentrationRepository(db);
+                const concentrationRepo = repos.concentration;
                 if (concentrationRepo.isConcentrating(parsed.targetId)) {
                     const targetChar = charRepo.findById(parsed.targetId);
                     if (targetChar) {
@@ -1484,8 +1493,7 @@ export async function handleExecuteCombatAction(args: unknown, ctx: SessionConte
 
         // Sync HP to character database after heal
         if (result.success && result.healAmount && result.healAmount > 0) {
-            const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
-            const charRepo = new CharacterRepository(db);
+            const charRepo = combatReposFactory().characters;
 
             // Get updated target HP from combat state and sync to character DB
             const updatedState = engine.getState();
@@ -1695,8 +1703,7 @@ export async function handleExecuteCombatAction(args: unknown, ctx: SessionConte
         }
 
         // Load character data for spellcasting validation
-        const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
-        const charRepo = new CharacterRepository(db);
+        const charRepo = combatReposFactory().characters;
         let casterChar: Character | null = null;
 
         try {
@@ -1816,8 +1823,7 @@ export async function handleExecuteCombatAction(args: unknown, ctx: SessionConte
 
         // Apply damage/healing to ALL targets
         if (resolution.damage && resolution.damage > 0 && allTargetIds.length > 0) {
-            const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
-            const concentrationRepo = new ConcentrationRepository(db);
+            const concentrationRepo = combatReposFactory().concentration;
 
             for (const tid of allTargetIds) {
                 const targetParticipant = currentState.participants.find(p => p.id === tid);
@@ -1930,8 +1936,7 @@ export async function handleExecuteCombatAction(args: unknown, ctx: SessionConte
 
         // Handle concentration
         if (spell.concentration) {
-            const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
-            const concentrationRepo = new ConcentrationRepository(db);
+            const concentrationRepo = combatReposFactory().concentration;
             const currentState = engine.getState();
 
             // Parse duration from spell (e.g., "Concentration, up to 1 minute")
@@ -2023,13 +2028,13 @@ export async function handleExecuteCombatAction(args: unknown, ctx: SessionConte
     // Save state
     const state = engine.getState();
     if (state) {
-        const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
-        const repo = new EncounterRepository(db);
+        const repos = combatReposFactory();
+        const repo = repos.encounters;
         repo.saveState(parsed.encounterId, state);
 
         // PLAYTEST-FIX: Log action to combat history for context compaction resilience
         if (result) {
-            const actionLogRepo = new CombatActionLogRepository(db);
+            const actionLogRepo = repos.actionLog;
             const actor = state.participants.find(p => p.id === parsed.actorId);
             const target = parsed.targetId ? state.participants.find(p => p.id === parsed.targetId) : undefined;
 
@@ -2102,8 +2107,7 @@ export async function handleAdvanceTurn(args: unknown, ctx: SessionContext) {
 
     // Auto-load from database if not in memory
     if (!engine) {
-        const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
-        const repo = new EncounterRepository(db);
+        const repo = combatReposFactory().encounters;
         const state = repo.loadState(parsed.encounterId);
 
         if (!state) {
@@ -2121,8 +2125,7 @@ export async function handleAdvanceTurn(args: unknown, ctx: SessionContext) {
 
     // Save state
     if (state) {
-        const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
-        const repo = new EncounterRepository(db);
+        const repo = combatReposFactory().encounters;
         repo.saveState(parsed.encounterId, state);
     }
 
@@ -2171,9 +2174,7 @@ export async function handleEndEncounter(args: unknown, ctx: SessionContext) {
     const syncResults: { id: string; name: string; hp: number; synced: boolean }[] = [];
 
     if (finalState) {
-        const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
-        const { CharacterRepository } = await import('../../storage/repos/character.repo.js');
-        const charRepo = new CharacterRepository(db);
+        const charRepo = combatReposFactory().characters;
 
         for (const participant of finalState.participants) {
             // Report HP from database (the source of truth)
@@ -2240,8 +2241,7 @@ export async function handleEndEncounter(args: unknown, ctx: SessionContext) {
 
 export async function handleLoadEncounter(args: unknown, ctx: SessionContext) {
     const parsed = CombatTools.LOAD_ENCOUNTER.inputSchema.parse(args);
-    const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
-    const repo = new EncounterRepository(db);
+    const repo = combatReposFactory().encounters;
 
     const state = repo.loadState(parsed.encounterId);
     if (!state) {
@@ -2346,8 +2346,7 @@ export async function handleRollDeathSave(args: unknown, ctx: SessionContext) {
     }
 
     // Save state
-    const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
-    const repo = new EncounterRepository(db);
+    const repo = combatReposFactory().encounters;
     repo.saveState(parsed.encounterId, engine.getState()!);
 
     return {
@@ -2473,8 +2472,7 @@ export async function handleExecuteLairAction(args: unknown, ctx: SessionContext
     output += `\n→ Call advance_turn to proceed to the next combatant`;
 
     // Save state
-    const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
-    const repo = new EncounterRepository(db);
+    const repo = combatReposFactory().encounters;
     repo.saveState(parsed.encounterId, engine.getState()!);
 
     return {
@@ -2500,8 +2498,7 @@ export async function handleRenderMap(args: unknown, ctx: SessionContext) {
 
     // Auto-load from database if not in memory
     if (!engine) {
-        const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
-        const repo = new EncounterRepository(db);
+        const repo = combatReposFactory().encounters;
         const state = repo.loadState(parsed.encounterId);
 
         if (!state) {
@@ -2538,8 +2535,7 @@ export async function handleCalculateAoe(args: unknown, ctx: SessionContext) {
 
     // Auto-load from database if not in memory
     if (!engine) {
-        const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
-        const repo = new EncounterRepository(db);
+        const repo = combatReposFactory().encounters;
         const state = repo.loadState(parsed.encounterId);
 
         if (!state) {
@@ -2895,8 +2891,7 @@ export async function handleUpdateTerrain(args: unknown, ctx: SessionContext) {
 
     // Auto-load from database if not in memory
     if (!engine) {
-        const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
-        const repo = new EncounterRepository(db);
+        const repo = combatReposFactory().encounters;
         const state = repo.loadState(parsed.encounterId);
 
         if (!state) {
@@ -2958,8 +2953,7 @@ export async function handleUpdateTerrain(args: unknown, ctx: SessionContext) {
     }
 
     // Save updated state to database
-    const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
-    const repo = new EncounterRepository(db);
+    const repo = combatReposFactory().encounters;
     repo.saveState(parsed.encounterId, state);
 
     // Build response
@@ -2990,8 +2984,7 @@ export async function handlePlaceProp(args: unknown, ctx: SessionContext) {
 
     // Auto-load from database if not in memory
     if (!engine) {
-        const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
-        const repo = new EncounterRepository(db);
+        const repo = combatReposFactory().encounters;
         const state = repo.loadState(parsed.encounterId);
 
         if (!state) {
@@ -3035,8 +3028,7 @@ export async function handlePlaceProp(args: unknown, ctx: SessionContext) {
     state.props.push(prop);
 
     // Save updated state to database
-    const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
-    const repo = new EncounterRepository(db);
+    const repo = combatReposFactory().encounters;
     repo.saveState(parsed.encounterId, state);
 
     // Build response
@@ -3081,8 +3073,7 @@ export async function handleMeasureDistance(args: unknown, ctx: SessionContext) 
 
     // Auto-load from database if not in memory
     if (!engine) {
-        const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
-        const repo = new EncounterRepository(db);
+        const repo = combatReposFactory().encounters;
         const state = repo.loadState(parsed.encounterId);
 
         if (!state) {
@@ -3164,8 +3155,7 @@ export async function handleGenerateTerrainPatch(args: unknown, ctx: SessionCont
 
     // Auto-load from database if not in memory
     if (!engine) {
-        const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
-        const repo = new EncounterRepository(db);
+        const repo = combatReposFactory().encounters;
         const state = repo.loadState(parsed.encounterId);
 
         if (!state) {
@@ -3215,8 +3205,7 @@ export async function handleGenerateTerrainPatch(args: unknown, ctx: SessionCont
         }
         
         // Persist state
-        const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
-        const repo = new EncounterRepository(db);
+        const repo = combatReposFactory().encounters;
         repo.saveState(parsed.encounterId, state);
         
         const stateJson = buildStateJson(state, parsed.encounterId);
@@ -3399,8 +3388,7 @@ export async function handleGenerateTerrainPatch(args: unknown, ctx: SessionCont
     }
 
     // Save updated state
-    const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
-    const repo = new EncounterRepository(db);
+    const repo = combatReposFactory().encounters;
     repo.saveState(parsed.encounterId, state);
 
     // Build response
@@ -3442,8 +3430,7 @@ export async function handleGenerateTerrainPattern(args: unknown, ctx: SessionCo
 
     // Auto-load from database if not in memory
     if (!engine) {
-        const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
-        const repo = new EncounterRepository(db);
+        const repo = combatReposFactory().encounters;
         const state = repo.loadState(parsed.encounterId);
 
         if (!state) {
@@ -3518,8 +3505,7 @@ export async function handleGenerateTerrainPattern(args: unknown, ctx: SessionCo
     }
     
     // Persist state
-    const db = getDb(process.env.NODE_ENV === 'test' ? ':memory:' : 'rpg.db');
-    const repo = new EncounterRepository(db);
+    const repo = combatReposFactory().encounters;
     repo.saveState(parsed.encounterId, state);
     
     const stateJson = buildStateJson(state, parsed.encounterId);
