@@ -31,14 +31,16 @@ const combatHandlersSource = readFileSync(
 
 describe('ADR-003 combat handler<->repo boundary (#15)', () => {
     it('combat-handlers.ts contains no direct getDb( calls', () => {
-        const matches = combatHandlersSource.match(/getDb\(/g) ?? [];
+        // Tolerate whitespace before the paren (`getDb (`) so the guard can't be bypassed.
+        const matches = combatHandlersSource.match(/getDb\s*\(/g) ?? [];
         // Was 31 before the facade landed -> RED. Must be 0 after.
         expect(matches.length).toBe(0);
     });
 
     it('combat-handlers.ts does not reintroduce the legacy rpg.db ternary', () => {
         // The whole point of the facade is path-honesty via resolveConsolidatedDbPath().
-        expect(combatHandlersSource).not.toContain("'rpg.db'");
+        // Match either quote style so a "rpg.db" variant can't slip past the guard.
+        expect(combatHandlersSource).not.toMatch(/['"]rpg\.db['"]/);
     });
 
     it('exposes the combat DB facade and the handler DI seam', () => {

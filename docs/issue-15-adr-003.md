@@ -46,7 +46,7 @@ Introduce **domain service/facade interfaces** between MCP handlers and reposito
   concentration, actionLog }`. It contains zero `getDb()` calls and no hardcoded
   database path.
 - **The service owns resolution + construction.** `getCombatRepos()` resolves the
-  combat database exactly once via `getDb(resolveConsolidatedDbPath())` — the #72
+  combat database once per invocation via `getDb(resolveConsolidatedDbPath())` — the #72
   single source of truth — and constructs the four combat repositories. This
   replaces the legacy `getDb(NODE_ENV === 'test' ? ':memory:' : 'rpg.db')`
   pattern, which hardcoded `'rpg.db'` and ignored `RPG_DATA_DIR` (a latent

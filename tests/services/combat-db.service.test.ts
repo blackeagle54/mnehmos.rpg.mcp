@@ -37,11 +37,16 @@ describe('getCombatRepos (ADR-003 combat facade #15)', () => {
         expect(repos.db).toBe(getDb(':memory:'));
     });
 
-    it('re-resolves the handle each call (does not cache at module scope)', () => {
-        // Both calls hit the singleton, so they must agree — and agree with getDb().
+    it('re-resolves each call without caching the facade/repos at module scope', () => {
         const a = getCombatRepos();
         const b = getCombatRepos();
+        // The db handle is the process-global singleton, so it must be the SAME object...
         expect(a.db).toBe(b.db);
         expect(a.db).toBe(getDb(':memory:'));
+        // ...but the facade and its repos must be FRESHLY constructed each call (no
+        // module-scope cache), else a stale/closed handle could be pinned across forks.
+        expect(a).not.toBe(b);
+        expect(a.encounters).not.toBe(b.encounters);
+        expect(a.characters).not.toBe(b.characters);
     });
 });
