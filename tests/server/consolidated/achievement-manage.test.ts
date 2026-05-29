@@ -207,6 +207,10 @@ describe('achievement_manage consolidated tool', () => {
             const first = parseResult(await handleAchievementManage({
                 action: 'unlock', characterId: charId, achievementId: 'first_blood',
             }, ctx));
+            // Let the wall clock advance so a (buggy) rewritten unlockedAt would be
+            // a DIFFERENT ISO timestamp — otherwise a same-millisecond rewrite would
+            // false-pass this idempotency assertion.
+            await new Promise((resolve) => setTimeout(resolve, 2));
             const second = parseResult(await handleAchievementManage({
                 action: 'unlock', characterId: charId, achievementId: 'first_blood',
             }, ctx));
@@ -330,6 +334,20 @@ describe('achievement_manage consolidated tool', () => {
             expect(inProgressIds).toEqual(['a3']);
             const a3 = data.inProgress.find((p: { id: string }) => p.id === 'a3');
             expect(a3.progress).toBe(4);
+            expect(a3.target).toBe(10);
+        });
+
+        it('includes a zero-progress incremental entry in inProgress (progress 0 is present, not absent)', async () => {
+            // Seed a tracked-but-unstarted entry directly: progress 0, no unlockedAt.
+            // The get handler must treat progress:0 as a real value, not "absent"
+            // (a truthy check on entry.progress would wrongly drop it).
+            const repo = new CharacterRepository(getDb(':memory:'));
+            repo.update(charId, { achievements: { a3: { progress: 0 } } as never });
+
+            const data = parseResult(await handleAchievementManage({ action: 'get', characterId: charId }, ctx));
+            const a3 = data.inProgress.find((p: { id: string }) => p.id === 'a3');
+            expect(a3).toBeDefined();
+            expect(a3.progress).toBe(0);
             expect(a3.target).toBe(10);
         });
 

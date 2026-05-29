@@ -312,7 +312,7 @@ async function handleGet(args: z.infer<typeof GetSchema>): Promise<object> {
         if (entry.unlockedAt) {
             unlocked.push({ id, name: def.name, points: def.points, unlockedAt: entry.unlockedAt });
             totalPoints += def.points;
-        } else if (def.target !== undefined && entry.progress) {
+        } else if (def.target !== undefined && entry.progress !== undefined) {
             inProgress.push({ id, name: def.name, progress: entry.progress, target: def.target });
         }
     }
