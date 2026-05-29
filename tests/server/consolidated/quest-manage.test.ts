@@ -4,6 +4,7 @@
  */
 
 import { handleQuestManage, QuestManageTool } from '../../../src/server/consolidated/quest-manage.js';
+import { handleSkillManage } from '../../../src/server/consolidated/skill-manage.js';
 import { getDb, closeDb } from '../../../src/storage/index.js';
 import { CharacterRepository } from '../../../src/storage/repos/character.repo.js';
 import { WorldRepository } from '../../../src/storage/repos/world.repo.js';
@@ -281,6 +282,60 @@ describe('quest_manage consolidated tool', () => {
             }, ctx);
 
             const data = parseResult(result);
+            expect(data.actionType).toBe('assign');
+        });
+    });
+
+    describe('assign with skillRequirements (Phase-3 gate)', () => {
+        it('rejects assign when the character does not meet a skill gate', async () => {
+            const created = parseResult(await handleQuestManage({
+                action: 'create',
+                name: 'Master Smith',
+                description: 'Forge a legendary blade',
+                worldId: testWorldId,
+                objectives: [{ description: 'Forge', type: 'custom' }],
+                skillRequirements: [{ skill: 'crafting', level: 20 }]
+            }, ctx));
+
+            const result = await handleQuestManage({
+                action: 'assign',
+                characterId: testCharacterId,
+                questId: created.questId
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.error).toBe(true);
+            expect(data.message).toContain('crafting');
+            expect(data.message).toContain('20');
+            expect(data.message).toContain('1'); // current level
+        });
+
+        it('permits assign once the character meets the skill gate', async () => {
+            const created = parseResult(await handleQuestManage({
+                action: 'create',
+                name: 'Master Smith II',
+                description: 'Forge a legendary blade',
+                worldId: testWorldId,
+                objectives: [{ description: 'Forge', type: 'custom' }],
+                skillRequirements: [{ skill: 'crafting', level: 20 }]
+            }, ctx));
+
+            // Seed the character's crafting skill to meet the gate.
+            await handleSkillManage({
+                action: 'set_level',
+                characterId: testCharacterId,
+                skill: 'crafting',
+                level: 20
+            }, ctx);
+
+            const result = await handleQuestManage({
+                action: 'assign',
+                characterId: testCharacterId,
+                questId: created.questId
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.success).toBe(true);
             expect(data.actionType).toBe('assign');
         });
     });

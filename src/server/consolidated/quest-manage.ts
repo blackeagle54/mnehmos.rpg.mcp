@@ -17,6 +17,8 @@ import { CharacterRepository } from '../../storage/repos/character.repo.js';
 import { InventoryRepository } from '../../storage/repos/inventory.repo.js';
 import { ItemRepository } from '../../storage/repos/item.repo.js';
 import { ToolContract } from '../tool-metadata.js';
+import { SkillNameSchema } from '../../schema/skill.js';
+import { levelFromXp } from '../../math/skill-xp.js';
 // Quest types from schema: kill, collect, deliver, explore, interact, custom
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -67,6 +69,10 @@ const CreateSchema = z.object({
         items: z.array(z.string()).default([])
     }).default({ experience: 0, gold: 0, items: [] }),
     prerequisites: z.array(z.string()).default([]).describe('Required completed quest IDs'),
+    skillRequirements: z.array(z.object({
+        skill: SkillNameSchema,
+        level: z.number().int().min(1).max(99)
+    })).default([]).describe('Required minimum skill levels checked on assign'),
     status: z.enum(['available', 'active', 'completed', 'failed']).default('available')
 });
 
@@ -137,6 +143,7 @@ async function handleCreate(args: z.infer<typeof CreateSchema>): Promise<object>
         objectives,
         rewards: args.rewards,
         prerequisites: args.prerequisites,
+        skillRequirements: args.skillRequirements,
         status: args.status,
         createdAt: now,
         updatedAt: now
@@ -233,6 +240,20 @@ async function handleAssign(args: z.infer<typeof AssignSchema>): Promise<object>
             const prereqQuest = questRepo.findById(prereqId);
             const prereqName = prereqQuest?.name || prereqId;
             return { error: true, message: `Prerequisite quest "${prereqName}" not completed` };
+        }
+    }
+
+    // PHASE-3: Check skill requirements. Derive the current skill level from the
+    // character's stored XP (default skills for legacy characters) rather than a
+    // possibly stale stored level.
+    for (const req of quest.skillRequirements) {
+        const entry = character.skills?.[req.skill];
+        const currentLevel = entry ? levelFromXp(entry.xp) : 1;
+        if (currentLevel < req.level) {
+            return {
+                error: true,
+                message: `Requires ${req.skill} level ${req.level} (you have ${currentLevel})`
+            };
         }
     }
 
@@ -548,6 +569,7 @@ Each objective requires a "type" field. Valid values:
         objectives: z.array(z.any()).optional().describe('Quest objectives. Each requires { description, type } where type is one of: kill, collect, deliver, explore, interact, custom'),
         rewards: z.any().optional().describe('Quest rewards'),
         prerequisites: z.array(z.string()).optional(),
+        skillRequirements: z.array(z.any()).optional().describe('Skill gates: [{ skill, level }] checked on assign'),
         status: z.string().optional(),
         progress: z.number().optional().describe('Progress increment')
     })

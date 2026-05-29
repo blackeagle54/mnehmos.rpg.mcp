@@ -23,8 +23,8 @@ export class QuestRepository {
         const validQuest = QuestSchema.parse(quest);
 
         const stmt = this.db.prepare(`
-            INSERT INTO quests (id, world_id, name, description, status, objectives, rewards, prerequisites, giver, created_at, updated_at)
-            VALUES (@id, @worldId, @name, @description, @status, @objectives, @rewards, @prerequisites, @giver, @createdAt, @updatedAt)
+            INSERT INTO quests (id, world_id, name, description, status, objectives, rewards, prerequisites, skill_requirements, giver, created_at, updated_at)
+            VALUES (@id, @worldId, @name, @description, @status, @objectives, @rewards, @prerequisites, @skillRequirements, @giver, @createdAt, @updatedAt)
         `);
 
         stmt.run({
@@ -36,6 +36,7 @@ export class QuestRepository {
             objectives: JSON.stringify(validQuest.objectives),
             rewards: JSON.stringify(validQuest.rewards),
             prerequisites: JSON.stringify(validQuest.prerequisites),
+            skillRequirements: JSON.stringify(validQuest.skillRequirements),
             giver: validQuest.giver || null,
             createdAt: validQuest.createdAt,
             updatedAt: validQuest.updatedAt
@@ -64,7 +65,7 @@ export class QuestRepository {
 
         const stmt = this.db.prepare(`
             UPDATE quests
-            SET name = ?, description = ?, status = ?, objectives = ?, rewards = ?, prerequisites = ?, giver = ?, updated_at = ?
+            SET name = ?, description = ?, status = ?, objectives = ?, rewards = ?, prerequisites = ?, skill_requirements = ?, giver = ?, updated_at = ?
             WHERE id = ?
         `);
 
@@ -75,6 +76,7 @@ export class QuestRepository {
             JSON.stringify(validQuest.objectives),
             JSON.stringify(validQuest.rewards),
             JSON.stringify(validQuest.prerequisites),
+            JSON.stringify(validQuest.skillRequirements),
             validQuest.giver || null,
             validQuest.updatedAt,
             id
@@ -245,6 +247,8 @@ export class QuestRepository {
             objectives: JSON.parse(row.objectives),
             rewards: JSON.parse(row.rewards),
             prerequisites: JSON.parse(row.prerequisites),
+            // PHASE-3: skill gates — default to [] for legacy quests (back-compat)
+            skillRequirements: row.skill_requirements ? JSON.parse(row.skill_requirements) : [],
             giver: row.giver || undefined,
             createdAt: row.created_at,
             updatedAt: row.updated_at
@@ -270,6 +274,7 @@ interface QuestRow {
     objectives: string;
     rewards: string;
     prerequisites: string;
+    skill_requirements?: string | null;
     giver: string | null;
     created_at: string;
     updated_at: string;

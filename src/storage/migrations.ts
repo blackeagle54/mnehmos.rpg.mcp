@@ -862,6 +862,16 @@ function runMigrations(db: Database.Database) {
     db.exec(`ALTER TABLE characters ADD COLUMN skills TEXT;`);
   }
 
+  // PHASE-3: Add skill_requirements column to quests for skill-gated assign.
+  // Guarded ALTER for the same reason; defaults to '[]' so existing quests
+  // remain ungated.
+  const questColumns = db.prepare("PRAGMA table_info(quests)").all() as { name: string }[];
+  const hasSkillRequirements = questColumns.some(col => col.name === 'skill_requirements');
+  if (!hasSkillRequirements) {
+    console.error('[Migration] Adding skill_requirements column to quests table');
+    db.exec(`ALTER TABLE quests ADD COLUMN skill_requirements TEXT DEFAULT '[]';`);
+  }
+
   // Migration: Rename world_x/world_y to local_x/local_y if needed
   const hasWorldX = roomColumns.some(col => col.name === 'world_x');
   const hasWorldY = roomColumns.some(col => col.name === 'world_y');

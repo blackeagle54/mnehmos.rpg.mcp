@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { SkillNameSchema } from './skill.js';
 
 export const QuestSchema = z.object({
     id: z.string(),
@@ -21,6 +22,11 @@ export const QuestSchema = z.object({
         items: z.array(z.string()).default([]) // Item IDs
     }),
     prerequisites: z.array(z.string()).default([]), // Quest IDs that must be completed first
+    // PHASE-3: optional OSRS-style skill gates checked on assign.
+    skillRequirements: z.array(z.object({
+        skill: SkillNameSchema,
+        level: z.number().int().min(1).max(99)
+    })).default([]),
     giver: z.string().optional(), // NPC ID
     createdAt: z.string().datetime(),
     updatedAt: z.string().datetime()
