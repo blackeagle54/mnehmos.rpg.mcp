@@ -71,6 +71,73 @@ describe('CharacterRepository', () => {
         expect((repo.findById('char-xp') as Character).xp).toBe(150); // persisted on update
     });
 
+    // PHASE-3: skills JSON column round-trip (orthogonal OSRS skill axis).
+    it('persists skills through create and update (Phase-3)', () => {
+        const character: Character = {
+            id: 'char-skills',
+            name: 'Skill Hero',
+            stats: { str: 10, dex: 10, con: 10, int: 10, wis: 10, cha: 10 },
+            hp: 20,
+            maxHp: 20,
+            ac: 15,
+            level: 1,
+            characterType: 'pc',
+            skills: {
+                combat: { xp: 1154, level: 10 },
+                magic: { xp: 0, level: 1 },
+                crafting: { xp: 83, level: 2 },
+                gathering: { xp: 0, level: 1 },
+                social: { xp: 0, level: 1 },
+            },
+            createdAt: FIXED_TIMESTAMP,
+            updatedAt: FIXED_TIMESTAMP,
+        };
+
+        repo.create(character);
+
+        const retrieved = repo.findById('char-skills') as Character;
+        expect(retrieved.skills).toBeDefined();
+        expect(retrieved.skills?.combat).toEqual({ xp: 1154, level: 10 });
+        expect(retrieved.skills?.crafting).toEqual({ xp: 83, level: 2 });
+        expect(retrieved.skills?.magic).toEqual({ xp: 0, level: 1 });
+
+        repo.update('char-skills', {
+            skills: {
+                combat: { xp: 13034431, level: 99 },
+                magic: { xp: 0, level: 1 },
+                crafting: { xp: 0, level: 1 },
+                gathering: { xp: 0, level: 1 },
+                social: { xp: 0, level: 1 },
+            },
+        } as Partial<Character>);
+
+        const updated = repo.findById('char-skills') as Character;
+        expect(updated.skills?.combat).toEqual({ xp: 13034431, level: 99 });
+    });
+
+    // Back-compat: the 1889 existing rows have no skills — they must still parse,
+    // with skills coming back undefined (defaults-on-read happen at the tool layer).
+    it('parses a character WITHOUT skills (back-compat)', () => {
+        const character: Character = {
+            id: 'char-no-skills',
+            name: 'Legacy Hero',
+            stats: { str: 10, dex: 10, con: 10, int: 10, wis: 10, cha: 10 },
+            hp: 20,
+            maxHp: 20,
+            ac: 15,
+            level: 1,
+            characterType: 'pc',
+            createdAt: FIXED_TIMESTAMP,
+            updatedAt: FIXED_TIMESTAMP,
+        };
+
+        repo.create(character);
+
+        const retrieved = repo.findById('char-no-skills') as Character;
+        expect(retrieved).not.toBeNull();
+        expect(retrieved.skills).toBeUndefined();
+    });
+
     it('should create and retrieve an NPC', () => {
         const npc: NPC = {
             id: 'npc-1',

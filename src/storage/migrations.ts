@@ -852,6 +852,16 @@ function runMigrations(db: Database.Database) {
     db.exec(`ALTER TABLE characters ADD COLUMN xp INTEGER NOT NULL DEFAULT 0;`);
   }
 
+  // PHASE-3: Add skills column (OSRS-style per-skill XP, orthogonal to D&D xp).
+  // Guarded ALTER (not a CREATE-TABLE column): the base characters table does
+  // not list it, so an unguarded ALTER would throw 'duplicate column' on a
+  // re-run. Nullable for back-compat with existing rows (defaults-on-read).
+  const hasSkills = charColumns.some(col => col.name === 'skills');
+  if (!hasSkills) {
+    console.error('[Migration] Adding skills column to characters table');
+    db.exec(`ALTER TABLE characters ADD COLUMN skills TEXT;`);
+  }
+
   // Migration: Rename world_x/world_y to local_x/local_y if needed
   const hasWorldX = roomColumns.some(col => col.name === 'world_x');
   const hasWorldY = roomColumns.some(col => col.name === 'world_y');
