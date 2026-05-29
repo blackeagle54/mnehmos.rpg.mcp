@@ -13,6 +13,7 @@ import { CharacterRepository } from '../../storage/repos/character.repo.js';
 import { PartyRepository } from '../../storage/repos/party.repo.js';
 import { CorpseRepository } from '../../storage/repos/corpse.repo.js';
 import { SessionContext } from '../types.js';
+import { ToolContract } from '../tool-metadata.js';
 
 export interface McpResponse {
     content: Array<{ type: 'text'; text: string }>;
@@ -548,6 +549,9 @@ export async function handleTravelManage(args: unknown, _ctx: SessionContext): P
 // Tool definition for registration
 export const TravelManageTool = {
     name: 'travel_manage',
+    category: 'party',
+    keywords: ['travel', 'move', 'rest', 'loot', 'journey', 'party'],
+    capabilities: ['Party travel', 'Encounter looting', 'Camp/rest'],
     description: `Party-wide travel, loot collection, and rest operations.
 
 🚶 TRAVEL WORKFLOW:
@@ -571,4 +575,4 @@ combat_manage (end) → travel_manage (loot) → travel_manage (rest) → travel
 Actions: travel, loot, rest
 Aliases: move→travel, collect→loot, camp→rest`,
     inputSchema: TravelManageInputSchema
-};
+} satisfies ToolContract;

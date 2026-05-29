@@ -17,6 +17,7 @@ import { TurnProcessor } from '../../engine/strategy/turn-processor.js';
 import { ConflictResolver } from '../../engine/strategy/conflict-resolver.js';
 import { DiplomacyEngine } from '../../engine/strategy/diplomacy-engine.js';
 import { TurnActionSchema } from '../../schema/turn-state.js';
+import { ToolContract } from '../tool-metadata.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -546,6 +547,9 @@ const router = createActionRouter({
 
 export const TurnManageTool = {
     name: 'turn_manage',
+    category: 'turn-management',
+    keywords: ['turn', 'phase', 'ready', 'poll', 'results', 'async'],
+    capabilities: ['Turn phases', 'Action submission', 'Result polling'],
     description: `Turn-based strategy game lifecycle (multi-agent coordination).
 
 🎮 STRATEGY TURN CYCLE:
@@ -578,7 +582,7 @@ Actions: init, get_status, submit_actions, mark_ready, poll_results`,
         actions: z.array(TurnActionSchema).optional().describe('Actions to submit'),
         turnNumber: z.number().optional().describe('Turn number (for poll_results)')
     })
-};
+} satisfies ToolContract;
 
 export async function handleTurnManage(args: unknown, _ctx: SessionContext): Promise<McpResponse> {
     const result = await router(args as Record<string, unknown>);

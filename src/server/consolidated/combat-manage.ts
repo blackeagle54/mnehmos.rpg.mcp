@@ -26,6 +26,7 @@ import { CombatActionLogRepository } from '../../storage/repos/combat-action-log
 import { EncounterRepository } from '../../storage/repos/encounter.repo.js';
 import { CombatEngine } from '../../engine/combat/engine.js';
 import { getCombatManager } from '../state/combat-manager.js';
+import { ToolContract } from '../tool-metadata.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -515,6 +516,9 @@ const router = createActionRouter({
 
 export const CombatManageTool = {
     name: 'combat_manage',
+    category: 'combat',
+    keywords: ['combat', 'encounter', 'initiative', 'turn', 'end', 'start'],
+    capabilities: ['Start/end encounters', 'Initiative', 'Death saves'],
     description: `Unified combat encounter management. Actions: ${ACTIONS.join(', ')}.
 Aliases: start/begin→create, state/status→get, finish/stop→end, restore/resume→load, next→advance, quick/spawn→spawn_quick_enemy.
 
@@ -551,7 +555,7 @@ For CORPSES after combat, use corpse_manage tool.`,
         count: z.number().optional().describe('Number of enemies to spawn (1-10)'),
         position: z.object({ x: z.number(), y: z.number() }).optional().describe('Starting position')
     })
-};
+} satisfies ToolContract;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // HANDLER

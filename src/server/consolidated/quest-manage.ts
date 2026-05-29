@@ -16,6 +16,7 @@ import { QuestRepository } from '../../storage/repos/quest.repo.js';
 import { CharacterRepository } from '../../storage/repos/character.repo.js';
 import { InventoryRepository } from '../../storage/repos/inventory.repo.js';
 import { ItemRepository } from '../../storage/repos/item.repo.js';
+import { ToolContract } from '../tool-metadata.js';
 // Quest types from schema: kill, collect, deliver, explore, interact, custom
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -512,6 +513,9 @@ const router = createActionRouter({
 
 export const QuestManageTool = {
     name: 'quest_manage',
+    category: 'quest',
+    keywords: ['quest', 'objective', 'assign', 'complete', 'reward'],
+    capabilities: ['Quest lifecycle', 'Objectives', 'Rewards'],
     description: `Manage RPG quests - creation, assignment, progress, and completion.
 Actions: create, get, list, assign, update_objective, complete_objective, complete, get_log
 Aliases: new→create, accept→assign, progress→update_objective, finish→complete, log→get_log
@@ -547,7 +551,7 @@ Each objective requires a "type" field. Valid values:
         status: z.string().optional(),
         progress: z.number().optional().describe('Progress increment')
     })
-};
+} satisfies ToolContract;
 
 export async function handleQuestManage(args: unknown, _ctx: SessionContext): Promise<McpResponse> {
     const result = await router(args as Record<string, unknown>);

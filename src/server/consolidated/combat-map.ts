@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { createActionRouter, ActionDefinition, McpResponse } from '../../utils/action-router.js';
 import { SessionContext } from '../types.js';
 import { RichFormatter } from '../utils/formatter.js';
+import { ToolContract } from '../tool-metadata.js';
 import {
     handleRenderMap,
     handleCalculateAoe,
@@ -242,6 +243,9 @@ const router = createActionRouter({
 
 export const CombatMapTool = {
     name: 'combat_map',
+    category: 'combat',
+    keywords: ['map', 'terrain', 'grid', 'aoe', 'position', 'tactical'],
+    capabilities: ['Terrain management', 'AoE calculation', 'Grid operations'],
     description: `Unified combat map and terrain operations. Actions: ${ACTIONS.join(', ')}.
 
 🗺️ VISUALIZATION:
@@ -303,7 +307,7 @@ Use combat_action for combat actions (attack, move, cast).`,
         corridorWidth: z.number().optional(),
         roomCount: z.number().optional()
     })
-};
+} satisfies ToolContract;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // HANDLER

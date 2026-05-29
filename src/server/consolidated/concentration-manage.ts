@@ -23,6 +23,7 @@ import {
     checkAutomaticConcentrationBreak,
 } from '../../engine/magic/concentration.js';
 import { createActionRouter, ActionDefinition, McpResponse } from '../../utils/action-router.js';
+import { ToolContract } from '../tool-metadata.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -264,6 +265,9 @@ const router = createActionRouter({
 
 export const ConcentrationManageTool = {
     name: 'concentration_manage',
+    category: 'concentration',
+    keywords: ['concentration', 'spell', 'save', 'break', 'maintain'],
+    capabilities: ['Concentration checks', 'Break concentration', 'Duration tracking'],
     description: `Manage spell concentration (D&D 5e rules).
 
 🎯 WHEN TO USE:
@@ -288,7 +292,7 @@ Aliases: save/damage→check_save, end/stop→break, state→get`,
         reason: z.enum(['damage', 'incapacitated', 'death', 'new_spell', 'voluntary', 'duration']).optional(),
         currentRound: z.number().int().min(1).optional()
     })
-};
+} satisfies ToolContract;
 
 export async function handleConcentrationManage(args: unknown, _ctx: SessionContext): Promise<McpResponse> {
     return router(args as Record<string, unknown>);

@@ -14,6 +14,7 @@ import { resolveConsolidatedDbPath } from './db-path.js';
 import { SessionContext } from '../types.js';
 import { RichFormatter } from '../utils/formatter.js';
 import { DiceEngine } from '../../math/dice.js';
+import { ToolContract } from '../tool-metadata.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -498,6 +499,9 @@ const router = createActionRouter({
 
 export const InventoryManageTool = {
     name: 'inventory_manage',
+    category: 'inventory',
+    keywords: ['inventory', 'give', 'take', 'equip', 'use', 'transfer'],
+    capabilities: ['Give/take items', 'Equip/use', 'Transfer between characters'],
     description: `Manage character inventories and equipment.
 
 📦 ITEM WORKFLOW:
@@ -525,7 +529,7 @@ Aliases: add→give, take→remove, trade→transfer, consume→use, wield→equ
         targetId: z.string().optional().describe('Effect target (for use)'),
         slot: z.enum(['mainhand', 'offhand', 'armor', 'head', 'feet', 'accessory']).optional().describe('Equipment slot (for equip)')
     })
-};
+} satisfies ToolContract;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // HANDLER

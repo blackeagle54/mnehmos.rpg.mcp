@@ -11,6 +11,7 @@ import { getDb } from '../../storage/index.js';
 import { resolveConsolidatedDbPath } from './db-path.js';
 import { SessionContext } from '../types.js';
 import { RichFormatter } from '../utils/formatter.js';
+import { ToolContract } from '../tool-metadata.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -229,6 +230,9 @@ const router = createActionRouter({
 
 export const ItemManageTool = {
     name: 'item_manage',
+    category: 'inventory',
+    keywords: ['item', 'weapon', 'armor', 'gear', 'equipment', 'create'],
+    capabilities: ['Item templates', 'CRUD items', 'Item search'],
     description: `Manage item templates (definitions, not instances).
 
 📦 ITEM WORKFLOW:
@@ -261,7 +265,7 @@ Aliases: new→create, fetch→get, query→search`,
         minValue: z.number().optional().describe('Minimum value for search'),
         maxValue: z.number().optional().describe('Maximum value for search')
     })
-};
+} satisfies ToolContract;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // HANDLER

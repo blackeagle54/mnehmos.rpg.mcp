@@ -16,6 +16,7 @@ import { CharacterRepository } from '../../storage/repos/character.repo.js';
 import { SpatialRepository } from '../../storage/repos/spatial.repo.js';
 import { calculateHearingRadius, VolumeLevel } from '../../engine/social/hearing.js';
 import { rollStealthVsPerception, isDeafened, getEnvironmentModifier } from '../../engine/social/stealth-perception.js';
+import { ToolContract } from '../tool-metadata.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -461,6 +462,9 @@ const router = createActionRouter({
 
 export const NpcManageTool = {
     name: 'npc_manage',
+    category: 'npc',
+    keywords: ['npc', 'relationship', 'memory', 'conversation', 'social'],
+    capabilities: ['Relationships', 'Memory', 'Social interactions'],
     description: `Track NPC relationships, memories, and social interactions.
 
 🎭 SOCIAL AI WORKFLOW:
@@ -502,7 +506,7 @@ Actions: get_relationship, update_relationship, record_memory, get_history, get_
         volume: z.enum(['WHISPER', 'TALK', 'SHOUT']).optional(),
         intent: z.string().optional()
     })
-};
+} satisfies ToolContract;
 
 export async function handleNpcManage(args: unknown, _ctx: SessionContext): Promise<McpResponse> {
     const result = await router(args as Record<string, unknown>);

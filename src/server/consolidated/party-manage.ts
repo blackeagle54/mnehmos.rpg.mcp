@@ -37,6 +37,7 @@ import {
 } from '../../schema/party.js';
 import { createActionRouter, ActionDefinition, McpResponse } from '../../utils/action-router.js';
 import { RichFormatter } from '../utils/formatter.js';
+import { ToolContract } from '../tool-metadata.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -692,6 +693,9 @@ const router = createActionRouter({
 
 export const PartyManageTool = {
     name: 'party_manage',
+    category: 'party',
+    keywords: ['party', 'group', 'member', 'leader', 'formation', 'gold'],
+    capabilities: ['Party management', 'Member operations', 'Treasury'],
     description: `Manage adventuring parties and members.
 
 👥 PARTY LIFECYCLE:
@@ -741,7 +745,7 @@ Aliases: new/form->create, join/recruit->add_member, leader->set_leader, active/
         y: z.number().int().optional(),
         radiusSquares: z.number().int().optional()
     })
-};
+} satisfies ToolContract;
 
 export async function handlePartyManage(args: unknown, _ctx: SessionContext): Promise<McpResponse> {
     const response = await router(args as Record<string, unknown>);

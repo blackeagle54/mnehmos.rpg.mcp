@@ -21,6 +21,7 @@ import { getDb } from '../../storage/index.js';
 import { resolveConsolidatedDbPath } from './db-path.js';
 import { SessionContext } from '../types.js';
 import { createActionRouter, ActionDefinition, McpResponse } from '../../utils/action-router.js';
+import { ToolContract } from '../tool-metadata.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -459,6 +460,9 @@ const router = createActionRouter({
 
 export const SecretManageTool = {
     name: 'secret_manage',
+    category: 'secret',
+    keywords: ['secret', 'dm', 'hidden', 'mystery', 'reveal', 'clue'],
+    capabilities: ['Create/manage DM secrets', 'Reveal conditions', 'Leak detection'],
     description: `Manage DM secrets - hidden information players shouldn't see.
 
 🔒 SECRET WORKFLOW:
@@ -504,7 +508,7 @@ Aliases: new→create, reveal→disclose, check→check_conditions`,
         event: GameEventSchema.optional(),
         text: z.string().optional()
     })
-};
+} satisfies ToolContract;
 
 export async function handleSecretManage(args: unknown, _ctx: SessionContext): Promise<McpResponse> {
     return router(args as Record<string, unknown>);

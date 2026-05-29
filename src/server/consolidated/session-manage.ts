@@ -14,6 +14,7 @@ import { PartyRepository } from '../../storage/repos/party.repo.js';
 import { QuestRepository } from '../../storage/repos/quest.repo.js';
 import { WorldRepository } from '../../storage/repos/world.repo.js';
 import { SessionContext } from '../types.js';
+import { ToolContract } from '../tool-metadata.js';
 
 export interface McpResponse {
     content: Array<{ type: 'text'; text: string }>;
@@ -364,6 +365,9 @@ export async function handleSessionManage(args: unknown, ctx: SessionContext): P
 // Tool definition for registration
 export const SessionManageTool = {
     name: 'session_manage',
+    category: 'meta',
+    keywords: ['session', 'initialize', 'context', 'start', 'resume'],
+    capabilities: ['Session initialization', 'Context loading'],
     description: `Session lifecycle and narrative context for AI game mastering.
 
 🎮 SESSION WORKFLOW:
@@ -384,4 +388,4 @@ Inject context into system prompt for informed storytelling.
 Actions: initialize, get_context
 Aliases: init/start→initialize, context/narrative→get_context`,
     inputSchema: SessionManageInputSchema
-};
+} satisfies ToolContract;

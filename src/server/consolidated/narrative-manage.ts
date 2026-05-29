@@ -16,6 +16,7 @@ import { SessionContext } from '../types.js';
 import { getDb } from '../../storage/index.js';
 import { resolveConsolidatedDbPath } from './db-path.js';
 import { createActionRouter, ActionDefinition, McpResponse } from '../../utils/action-router.js';
+import { ToolContract } from '../tool-metadata.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTANTS & ENUMS
@@ -533,6 +534,9 @@ const router = createActionRouter({
 
 export const NarrativeManageTool = {
     name: 'narrative_manage',
+    category: 'narrative',
+    keywords: ['narrative', 'story', 'note', 'journal', 'log'],
+    capabilities: ['Story notes', 'Search history', 'Context retrieval'],
     description: `Manage narrative notes for AI-driven storytelling.
 
 📝 NOTE TYPES:
@@ -573,7 +577,7 @@ Aliases: create→add, find→search, context→get_context`,
         statusFilter: z.array(NoteStatusEnum).optional(),
         forPlayer: z.boolean().optional()
     })
-};
+} satisfies ToolContract;
 
 export async function handleNarrativeManage(args: unknown, _ctx: SessionContext): Promise<McpResponse> {
     return router(args as Record<string, unknown>);

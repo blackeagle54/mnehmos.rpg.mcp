@@ -11,6 +11,7 @@ import { getDb } from '../../storage/index.js';
 import { resolveConsolidatedDbPath } from './db-path.js';
 import { SessionContext } from '../types.js';
 import { RichFormatter } from '../utils/formatter.js';
+import { ToolContract } from '../tool-metadata.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -504,6 +505,9 @@ const router = createActionRouter({
 
 export const CorpseManageTool = {
     name: 'corpse_manage',
+    category: 'corpse',
+    keywords: ['corpse', 'loot', 'harvest', 'decay', 'body', 'death'],
+    capabilities: ['Loot corpses', 'Harvest materials', 'Decay management'],
     description: `Manage corpses and looting after combat.
 
 💀 POST-COMBAT WORKFLOW:
@@ -553,7 +557,7 @@ Aliases: spawn→create, take→loot, skin→harvest`,
         currencyRange: z.record(z.any()).optional().describe('Currency ranges'),
         harvestableResources: z.array(z.any()).optional().describe('Harvestable resources')
     })
-};
+} satisfies ToolContract;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // HANDLER

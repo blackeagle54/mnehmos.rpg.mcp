@@ -21,6 +21,7 @@ import { Structure, StructureType } from '../../schema/structure.js';
 import { BiomeType } from '../../schema/biome.js';
 import { generateWorld as generateWorldProc } from '../../engine/worldgen/index.js';
 import { getWorldManager } from '../state/world-manager.js';
+import { ToolContract } from '../tool-metadata.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -499,6 +500,9 @@ const router = createActionRouter({
 
 export const WorldManageTool = {
     name: 'world_manage',
+    category: 'world',
+    keywords: ['world', 'generate', 'seed', 'terrain', 'biome'],
+    capabilities: ['World generation', 'State queries', 'Environment updates'],
     description: `Manage RPG worlds - creation, retrieval, and procedural generation.
 Actions: create, get, list, delete, update (environment), generate (procedural), get_state
 Aliases: new→create, fetch→get, all→list, remove→delete, set→update, gen→generate, state→get_state
@@ -521,7 +525,7 @@ Aliases: new→create, fetch→get, all→list, remove→delete, set→update, g
         moistureOffset: z.number().optional(),
         environment: z.any().optional().describe('Environment properties (for update)')
     })
-};
+} satisfies ToolContract;
 
 export async function handleWorldManage(args: unknown, _ctx: SessionContext): Promise<McpResponse> {
     const result = await router(args as Record<string, unknown>);
