@@ -42,12 +42,11 @@ export class WorldRepository {
     }
 
     private static parseJsonColumn(value: string | null | undefined): Record<string, unknown> {
+        // A null/empty column means "absent" → {}. But a non-empty value that
+        // fails to parse is corruption: let it throw rather than silently coercing
+        // to {}, which would quietly rehydrate the wrong world. (#61, CodeRabbit)
         if (!value) return {};
-        try {
-            return JSON.parse(value);
-        } catch {
-            return {};
-        }
+        return JSON.parse(value);
     }
 
     findById(id: string): World | null {

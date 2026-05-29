@@ -28,9 +28,12 @@ export type Environment = z.infer<typeof EnvironmentSchema>;
  */
 export const WorldGenOptionsSchema = z
   .object({
-    landRatio: z.number().optional(),
-    temperatureOffset: z.number().optional(),
-    moistureOffset: z.number().optional(),
+    // Same bounds the generation tool schemas enforce, so a persisted row cannot
+    // bypass validation and feed an out-of-range value into generateWorld on
+    // restore (DB is the source of truth, but it is still validated). (#61, CodeRabbit)
+    landRatio: z.number().min(0.1).max(0.9).optional(),
+    temperatureOffset: z.number().min(-30).max(30).optional(),
+    moistureOffset: z.number().min(-30).max(30).optional(),
   })
   .passthrough();
 
