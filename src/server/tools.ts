@@ -1,3 +1,9 @@
+/**
+ * @deprecated Legacy tool surface — COMPATIBILITY MODE only (ADR-004, Accepted).
+ * The consolidated path (src/server/consolidated/*) is the advertised surface.
+ * The worldgen handlers below remain live: re-exported by
+ * src/server/consolidated/world-map.ts. Scheduled for staged removal per ADR-004.
+ */
 import { z } from 'zod';
 import { generateWorld } from '../engine/worldgen/index.js';
 import { BIOME_HABITABILITY, WATER_BIOMES, validateStructurePlacement, getSuggestedBiomesForStructure } from '../engine/worldgen/validation.js';

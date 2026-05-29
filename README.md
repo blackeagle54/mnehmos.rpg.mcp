@@ -116,6 +116,12 @@ This engine implements the **Event-Driven Agentic AI Architecture**:
 
 **Key invariant**: LLMs propose intentions. The engine validates and executes. LLMs never directly mutate world state.
 
+### Legacy Tool Surface (Compatibility Mode)
+
+The consolidated **28-tool action-routed path** (`src/server/consolidated/*`) is the advertised, supported tool surface.
+
+`src/server/tools.ts` is the older legacy-style surface and is **retained in compatibility mode**, not removed: its worldgen handlers are still consumed by the consolidated world-map tool (`src/server/consolidated/world-map.ts` re-exports them). It is slated for staged removal per [ADR-004](docs/issue-16-adr-004.md) once the documented deprecation trigger is met.
+
 ---
 
 ## Consolidated Tools Reference (28 Tools)
