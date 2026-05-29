@@ -6,6 +6,7 @@ import {
     PactMagicSlotsSchema,
     SpellcastingAbilitySchema
 } from './spell.js';
+import { SkillsSchema } from './skill.js';
 
 export const CharacterSchema = z.object({
     id: z.string(),
@@ -95,6 +96,11 @@ export const CharacterSchema = z.object({
         .optional().default([]).describe('Saving throws the character is proficient in'),
     expertise: z.array(z.string()).optional().default([])
         .describe('Skills with double proficiency bonus (rogues, bards)'),
+
+    // PHASE-3: OSRS-style progression skills (orthogonal to the D&D level/xp above).
+    // .optional() is LOAD-BEARING: the existing character rows have no skills and
+    // must still parse; the tool layer defaults-on-read to the all-{xp:0,level:1} map.
+    skills: SkillsSchema.optional(),
 
     createdAt: z.string().datetime(),
     updatedAt: z.string().datetime(),
