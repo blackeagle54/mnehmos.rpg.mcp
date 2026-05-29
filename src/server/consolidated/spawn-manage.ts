@@ -22,6 +22,7 @@ import { SpatialRepository } from '../../storage/repos/spatial.repo.js';
 import { SessionContext } from '../types.js';
 import { CombatEngine, CombatParticipant } from '../../engine/combat/engine.js';
 import { getCombatManager } from '../state/combat-manager.js';
+import { handleCombatManage } from './combat-manage.js';
 // generateEncounterMap removed - using local simple renderer
 import { expandCreatureTemplate } from '../../data/creature-presets.js';
 import { getPatternGenerator } from '../terrain-patterns.js';
@@ -123,7 +124,7 @@ function buildCharacter(data: {
 
 const ACTIONS = [
     'spawn_character', 'spawn_location', 'spawn_encounter',
-    'spawn_preset_location', 'spawn_tactical'
+    'spawn_preset_location', 'spawn_tactical', 'spawn_quick_enemy'
 ] as const;
 
 type SpawnAction = typeof ACTIONS[number];
@@ -159,12 +160,14 @@ const ALIASES: Record<string, SpawnAction> = {
     'tactical': 'spawn_tactical',
     'tactical_encounter': 'spawn_tactical',
     'setup_tactical': 'spawn_tactical',
-    'combat_setup': 'spawn_tactical'
+    'combat_setup': 'spawn_tactical',
+    'quick_enemy': 'spawn_quick_enemy',
+    'quick': 'spawn_quick_enemy'
 };
 
 // Input schema combining all spawn actions
 const SpawnManageInputSchema = z.object({
-    action: z.string().describe('Action: spawn_character, spawn_location, spawn_encounter, spawn_preset_location, spawn_tactical'),
+    action: z.string().describe('Action: spawn_character, spawn_location, spawn_encounter, spawn_preset_location, spawn_tactical, spawn_quick_enemy'),
 
     // Common fields
     name: z.string().optional().describe('Name for spawned entity'),
@@ -225,7 +228,14 @@ const SpawnManageInputSchema = z.object({
     gridSize: z.object({
         width: z.number().int().min(5).max(100).default(20),
         height: z.number().int().min(5).max(100).default(20)
-    }).optional().describe('Combat grid dimensions')
+    }).optional().describe('Combat grid dimensions'),
+
+    // spawn_quick_enemy fields — forwarded verbatim to combat_manage (issue #20).
+    // NOTE: spawn_manage's own `position` is a "x,y" string and is intentionally
+    // NOT forwarded; combat_manage expects a {x,y} object and defaults it.
+    creature: z.string().optional().describe('Creature name/template for spawn_quick_enemy (e.g., "goblin", "orc:warrior")'),
+    count: z.number().int().min(1).max(10).optional().describe('Number of enemies to spawn (spawn_quick_enemy)'),
+    encounterId: z.string().optional().describe('Existing encounter to add spawned enemies to (spawn_quick_enemy)')
 });
 
 type SpawnManageInput = z.infer<typeof SpawnManageInputSchema>;
@@ -1055,6 +1065,18 @@ export async function handleSpawnManage(args: unknown, ctx: SessionContext): Pro
             return handleSpawnPresetLocation(input, ctx);
         case 'spawn_tactical':
             return handleSpawnTactical(input, ctx);
+        case 'spawn_quick_enemy':
+            // Forward to combat_manage, which owns the spawn_quick_enemy
+            // implementation. Normalize the action (the caller may have used an
+            // alias like "quick_enemy") and pass only the fields combat_manage
+            // expects — deliberately omitting spawn_manage's string `position`. (#20)
+            return handleCombatManage({
+                action: 'spawn_quick_enemy',
+                creature: input.creature,
+                count: input.count,
+                encounterId: input.encounterId,
+                seed: input.seed
+            }, ctx);
         default:
             return {
                 content: [{
@@ -1081,6 +1103,7 @@ export const SpawnManageTool = {
 
 ⚔️ TACTICAL COMBAT:
 - spawn_tactical: Custom combat setup with positioned participants and terrain patterns
+- spawn_quick_enemy: Instantly spawn N preset creatures into combat (forwards to combat_manage)
 
 📋 TEMPLATES: goblin, orc, skeleton, zombie, bandit, wolf, bear, etc.
 Terrain patterns: arena, canyon, river_valley, mountain_pass, maze
@@ -1090,6 +1113,6 @@ Terrain patterns: arena, canyon, river_valley, mountain_pass, maze
 2. Use combat_action for attacks, combat_map for visualization
 3. Use corpse_manage after combat ends
 
-Actions: spawn_character, spawn_location, spawn_encounter, spawn_preset_location, spawn_tactical`,
+Actions: spawn_character, spawn_location, spawn_encounter, spawn_preset_location, spawn_tactical, spawn_quick_enemy`,
     inputSchema: SpawnManageInputSchema
 };

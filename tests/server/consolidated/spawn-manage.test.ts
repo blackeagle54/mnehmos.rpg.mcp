@@ -497,4 +497,34 @@ describe('spawn_manage consolidated tool', () => {
             expect(text).toContain('<!-- SPAWN_MANAGE_JSON');
         });
     });
+
+    // Regression for issue #20: spawn_quick_enemy was implemented only on
+    // combat_manage. spawn_manage's fuzzy router scored it 0.471 < 0.6 and
+    // returned `Unknown action: "spawn_quick_enemy"`, so the documented action
+    // never worked from spawn_manage. Forward it to combat_manage instead.
+    describe('spawn_quick_enemy forwarding (issue #20)', () => {
+        it('forwards spawn_quick_enemy to combat_manage instead of an Unknown-action error', async () => {
+            const result = await handleSpawnManage({
+                action: 'spawn_quick_enemy',
+                creature: 'goblin',
+                count: 3
+            }, ctx);
+
+            const text = result.content[0].text;
+            expect(text).not.toContain('Unknown action');
+            // The forwarded combat_manage success response carries spawnedCount.
+            expect(text).toContain('spawnedCount');
+        });
+
+        it('routes the "quick_enemy" alias to the forwarded action', async () => {
+            const result = await handleSpawnManage({
+                action: 'quick_enemy',
+                creature: 'goblin'
+            }, ctx);
+
+            const text = result.content[0].text;
+            expect(text).not.toContain('Unknown action');
+            expect(text).toContain('spawnedCount');
+        });
+    });
 });
