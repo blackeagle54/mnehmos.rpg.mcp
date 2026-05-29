@@ -160,7 +160,7 @@ const ListChainsSchema = z.object({
 const SelectBranchSchema = z.object({
     action: z.literal('select_branch'),
     characterId: z.string().describe('Character ID making the choice'),
-    chainId: z.string().describe('Chain ID the branch belongs to'),
+    questId: z.string().describe('Source (branching) quest ID that OWNS the branches'),
     choiceId: z.string().describe('The branch choiceId to select')
 });
 
@@ -199,23 +199,24 @@ function questGateReason(
 
 /**
  * Find whether `quest` is a branch target of some OTHER quest. Returns the
- * owning source's { chainId, choiceId } so callers can check the character's
- * recorded branch choice. A quest reachable only via a player branch is gated
- * behind that choice (in addition to its own prerequisites/skill gates).
+ * owning source's { sourceQuestId, choiceId } so callers can check the
+ * character's recorded branch choice. A quest reachable only via a player branch
+ * is gated behind that choice (in addition to its own prerequisites/skill
+ * gates).
  *
- * The branch-source quest must carry a chainId (set_chain validates the edge),
- * which scopes the recorded choice to that chain. The TARGET quest does NOT
- * need its own chainId — a branch target is gated purely by being referenced.
+ * The recorded choice is keyed by the SOURCE (branching) quest id — the branch
+ * point — not the chainId, so a chain with two branch points keeps both
+ * decisions distinct (see chainChoices in quest.ts). validateChain rejects a
+ * branch target owned by more than one source, so the first match is the sole
+ * owner; the TARGET quest does NOT need its own chainId.
  */
 function findBranchGate(
     questRepo: QuestRepository,
     quest: Quest
-): { chainId: string; choiceId: string } | null {
+): { sourceQuestId: string; choiceId: string } | null {
     for (const candidate of questRepo.findAll()) {
-        const sourceChainId = candidate.chain.chainId;
-        if (sourceChainId === undefined) continue; // a chainless source has no recorded-choice scope
         const match = candidate.chain.branches.find(b => b.questId === quest.id);
-        if (match) return { chainId: sourceChainId, choiceId: match.choiceId };
+        if (match) return { sourceQuestId: candidate.id, choiceId: match.choiceId };
     }
     return null;
 }
@@ -237,12 +238,105 @@ function deriveUnlockState(
     if (log.activeQuests.includes(quest.id)) return 'active';
     if (questGateReason(quest, character, log.completedQuests) !== null) return 'locked';
     // Branch gate: an unchosen branch target stays locked even when its
-    // prerequisites pass.
+    // prerequisites pass. The recorded choice is keyed by the source quest id.
     const branchGate = findBranchGate(questRepo, quest);
-    if (branchGate && log.chainChoices[branchGate.chainId] !== branchGate.choiceId) {
+    if (branchGate && log.chainChoices[branchGate.sourceQuestId] !== branchGate.choiceId) {
         return 'locked';
     }
     return 'available';
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CHAIN VALIDATION (shared by create + set_chain)
+// ═══════════════════════════════════════════════════════════════════════════
+
+interface ChainBranch {
+    choiceId: string;
+    label: string;
+    questId: string;
+}
+
+interface ChainShape {
+    chainId?: string;
+    order?: number;
+    nextQuests: string[];
+    branches: ChainBranch[];
+}
+
+/**
+ * SINGLE SOURCE OF TRUTH for "is this chain graph well-formed?". Run by BOTH
+ * create (before persisting) and set_chain so the two paths cannot diverge.
+ *
+ * Returns a human-readable reason string when the chain is invalid, or null when
+ * it is well-formed. Rejects:
+ *  - self-links: nextQuests/branches pointing at the quest itself
+ *  - dangling targets: referenced quest IDs that do not exist
+ *  - duplicate branch choiceIds (ambiguous select_branch target)
+ *  - branches without a chainId (a chainless branch source can never be
+ *    gated/selected — see findBranchGate / select_branch)
+ *  - a branch target already owned by a DIFFERENT source quest (so findBranchGate
+ *    has exactly one owner per target; same-source re-set is allowed)
+ *
+ * `selfQuestId` is the id of the quest the chain belongs to. For set_chain it is
+ * the existing quest id; for create it is the freshly minted id (create cannot
+ * collide with itself by construction, but passing it keeps the rule uniform and
+ * future-proofs explicit-id creates).
+ */
+function validateChain(
+    chain: ChainShape,
+    selfQuestId: string,
+    questRepo: QuestRepository
+): string | null {
+    const nextQuests = chain.nextQuests ?? [];
+    const branches = chain.branches ?? [];
+
+    // Self-link rejection.
+    if (nextQuests.includes(selfQuestId)) {
+        return `Quest cannot reference itself in nextQuests`;
+    }
+    if (branches.some(b => b.questId === selfQuestId)) {
+        return `Quest cannot reference itself in a branch`;
+    }
+
+    // Branches require a chainId — a chainless branch source can never be
+    // gated/selected (findBranchGate has no recorded-choice scope without one).
+    if (branches.length > 0 && (chain.chainId === undefined || chain.chainId === '')) {
+        return `Branches require a chainId (a chainless branch source can never be selected)`;
+    }
+
+    // Duplicate branch choiceIds (ambiguous select_branch target).
+    const seenChoices = new Set<string>();
+    for (const b of branches) {
+        if (seenChoices.has(b.choiceId)) {
+            return `Duplicate branch choiceId "${b.choiceId}"`;
+        }
+        seenChoices.add(b.choiceId);
+    }
+
+    // Dangling graph edges: every referenced quest ID must exist.
+    const referenced = [...nextQuests, ...branches.map(b => b.questId)];
+    for (const refId of referenced) {
+        if (!questRepo.findById(refId)) {
+            return `Referenced quest ${refId} does not exist`;
+        }
+    }
+
+    // Single branch owner per target: a branch target may be owned by only ONE
+    // source quest, otherwise findBranchGate's first-match owner is
+    // order-dependent. Same-source re-set is allowed.
+    const branchTargets = new Set(branches.map(b => b.questId));
+    if (branchTargets.size > 0) {
+        for (const other of questRepo.findAll()) {
+            if (other.id === selfQuestId) continue; // self re-set is fine
+            for (const b of other.chain.branches) {
+                if (branchTargets.has(b.questId)) {
+                    return `Branch target ${b.questId} is already owned by quest ${other.id}`;
+                }
+            }
+        }
+    }
+
+    return null;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -262,8 +356,16 @@ async function handleCreate(args: z.infer<typeof CreateSchema>): Promise<object>
         completed: obj.completed ?? false
     }));
 
+    // Mint the id up-front so chain validation can reject self-links and so the
+    // create path runs the SAME graph checks as set_chain (no bypass).
+    const questId = randomUUID();
+    const chainReason = validateChain(args.chain, questId, questRepo);
+    if (chainReason) {
+        return { error: true, message: chainReason };
+    }
+
     const quest = {
-        id: randomUUID(),
+        id: questId,
         name: args.name,
         description: args.description,
         worldId: args.worldId,
@@ -400,7 +502,7 @@ async function handleAssign(args: z.infer<typeof AssignSchema>): Promise<object>
     // until select_branch records the choice.
     const branchGate = findBranchGate(questRepo, quest);
     if (branchGate) {
-        const chosen = log.chainChoices[branchGate.chainId];
+        const chosen = log.chainChoices[branchGate.sourceQuestId];
         if (chosen !== branchGate.choiceId) {
             return {
                 error: true,
@@ -655,41 +757,19 @@ async function handleSetChain(args: z.infer<typeof SetChainSchema>): Promise<obj
         return { error: true, message: `Quest ${args.questId} not found` };
     }
 
-    const nextQuests = args.nextQuests ?? [];
-    const branches = args.branches ?? [];
-
-    // Reject self-reference: a quest may not unlock itself (would dead-lock /
-    // loop on completion).
-    if (nextQuests.includes(args.questId)) {
-        return { error: true, message: `Quest cannot reference itself in nextQuests` };
-    }
-    if (branches.some(b => b.questId === args.questId)) {
-        return { error: true, message: `Quest cannot reference itself in a branch` };
-    }
-
-    // Reject duplicate branch choiceIds (ambiguous select_branch target).
-    const seenChoices = new Set<string>();
-    for (const b of branches) {
-        if (seenChoices.has(b.choiceId)) {
-            return { error: true, message: `Duplicate branch choiceId "${b.choiceId}"` };
-        }
-        seenChoices.add(b.choiceId);
-    }
-
-    // Validate every referenced quest ID exists (no dangling graph edges).
-    const referenced = [...nextQuests, ...branches.map(b => b.questId)];
-    for (const refId of referenced) {
-        if (!questRepo.findById(refId)) {
-            return { error: true, message: `Referenced quest ${refId} does not exist` };
-        }
-    }
-
     const chain = {
         chainId: args.chainId,
         order: args.order,
-        nextQuests,
-        branches
+        nextQuests: args.nextQuests ?? [],
+        branches: args.branches ?? []
     };
+
+    // Run the SAME graph validation as create (self-links, dangling targets,
+    // duplicate choiceIds, branches-without-chainId, single branch owner).
+    const chainReason = validateChain(chain, args.questId, questRepo);
+    if (chainReason) {
+        return { error: true, message: chainReason };
+    }
 
     const updated = questRepo.update(args.questId, { chain });
     if (!updated) {
@@ -817,26 +897,16 @@ async function handleSelectBranch(args: z.infer<typeof SelectBranchSchema>): Pro
         return { error: true, message: `Character ${args.characterId} not found` };
     }
 
-    // Find the source quest in this chain that owns the branch (a completed
-    // quest whose chain.branches contains the choiceId).
-    const chainQuests = questRepo.findAll().filter(q => q.chain.chainId === args.chainId);
-    if (chainQuests.length === 0) {
-        return { error: true, message: `No chain found for ${args.chainId}` };
+    // The decision belongs to its branch point: look up the branch on the SOURCE
+    // (branching) quest the caller named, not anywhere in the chain.
+    const sourceQuest = questRepo.findById(args.questId);
+    if (!sourceQuest) {
+        return { error: true, message: `Quest ${args.questId} not found` };
     }
 
-    let branch: { choiceId: string; label: string; questId: string } | undefined;
-    let sourceQuest: Quest | undefined;
-    for (const q of chainQuests) {
-        const match = q.chain.branches.find(b => b.choiceId === args.choiceId);
-        if (match) {
-            branch = match;
-            sourceQuest = q;
-            break;
-        }
-    }
-
-    if (!branch || !sourceQuest) {
-        return { error: true, message: `Branch choice "${args.choiceId}" not found in chain ${args.chainId}` };
+    const branch = sourceQuest.chain.branches.find(b => b.choiceId === args.choiceId);
+    if (!branch) {
+        return { error: true, message: `Branch choice "${args.choiceId}" not found on quest ${args.questId}` };
     }
 
     // The branch's source quest must have been completed by this character
@@ -852,18 +922,31 @@ async function handleSelectBranch(args: z.infer<typeof SelectBranchSchema>): Pro
         return { error: true, message: `Branch target quest ${branch.questId} no longer exists` };
     }
 
+    // A committed decision is immutable: switching to a DIFFERENT choice at the
+    // same branch point would unlock both paths. Repeating the SAME choice is
+    // idempotent (no error). The choice is keyed by the SOURCE quest id so a
+    // chain with multiple branch points keeps each decision distinct.
+    const existing = log.chainChoices[sourceQuest.id];
+    if (existing !== undefined && existing !== args.choiceId) {
+        return {
+            error: true,
+            message: `Branch already chosen for quest "${sourceQuest.name}" (cannot switch from "${existing}" to "${args.choiceId}")`
+        };
+    }
+
     // Record the choice. The chosen branch's questId becomes assignable purely
     // because the chosen path's prerequisites (typically the source quest) are
     // now satisfied; the OTHER branches stay gated since they are not chosen and
     // their assign path will still see the choice recorded here.
-    log.chainChoices[args.chainId] = args.choiceId;
+    log.chainChoices[sourceQuest.id] = args.choiceId;
     questRepo.updateLog(log);
 
     return {
         success: true,
         actionType: 'select_branch',
         characterId: args.characterId,
-        chainId: args.chainId,
+        questId: sourceQuest.id,
+        chainId: sourceQuest.chain.chainId,
         choiceId: args.choiceId,
         chosenQuestId: branch.questId,
         message: `Chose "${branch.label}" — unlocked "${target.name}"`
@@ -972,7 +1055,7 @@ Aliases: new→create, accept→assign, progress→update_objective, finish→co
 - set_chain - Link a quest to nextQuests (auto-unlocked on complete) and/or branches (player-choice paths)
 - get_chain - View a chain graph with per-character unlock state (locked/available/active/completed)
 - list_chains - List all chains grouped by chainId
-- select_branch - Record a branch choice; unlocks ONLY the chosen path
+- select_branch - Record a branch choice on the SOURCE (branching) quest (pass that questId); unlocks ONLY the chosen path. The decision is immutable once made.
 
 📜 QUEST WORKFLOW:
 1. create - Define a quest with objectives and rewards

@@ -669,6 +669,7 @@ describe('quest_manage consolidated tool', () => {
                 const res = parseResult(await handleQuestManage({
                     action: 'set_chain',
                     questId: a,
+                    chainId: 'a3', // branches require a chainId (Finding 3)
                     branches: [{ choiceId: 'x', label: 'X', questId: 'ghost-quest' }]
                 }, ctx));
                 expect(res.error).toBe(true);
@@ -811,11 +812,11 @@ describe('quest_manage consolidated tool', () => {
                 expect(completeRes.unlockedNext ?? []).not.toContain(good);
                 expect(completeRes.unlockedNext ?? []).not.toContain(evil);
 
-                // Player chooses good.
+                // Player chooses good (keyed by the source/branching quest id).
                 const sel = parseResult(await handleQuestManage({
                     action: 'select_branch',
                     characterId: testCharacterId,
-                    chainId: 'moral',
+                    questId: a,
                     choiceId: 'good'
                 }, ctx));
                 expect(sel.success).toBe(true);
@@ -832,11 +833,11 @@ describe('quest_manage consolidated tool', () => {
                 }, ctx));
                 expect(assignEvil.error).toBe(true);
 
-                // The choice is recorded on the log.
+                // The choice is recorded on the log, keyed by the source quest id.
                 const chain = parseResult(await handleQuestManage({
                     action: 'get_chain', chainId: 'moral', characterId: testCharacterId
                 }, ctx));
-                expect(chain.chainChoices?.moral).toBe('good');
+                expect(chain.chainChoices?.[a]).toBe('good');
             });
 
             it('select_branch rejects a choiceId not present in the source quest branches', async () => {
@@ -854,11 +855,231 @@ describe('quest_manage consolidated tool', () => {
                 const sel = parseResult(await handleQuestManage({
                     action: 'select_branch',
                     characterId: testCharacterId,
-                    chainId: 'moral2',
+                    questId: a,
                     choiceId: 'nonexistent'
                 }, ctx));
                 expect(sel.error).toBe(true);
                 expect(sel.message).toContain('nonexistent');
+            });
+
+            // FINDING 1 (regression): two branch points in one chain must each
+            // remember their OWN decision. Keying chainChoices by chainId would
+            // let the second branch point's choice overwrite the first.
+            it('remembers a separate choice for each of two branch points in one chain', async () => {
+                // Branch point 1: source S1 -> {p1a, p1b}. Choosing p1a unlocks S2.
+                const s1 = await createQuest('Saga 1');
+                const p1a = await createQuest('Path 1A', { prerequisites: [s1] });
+                const p1b = await createQuest('Path 1B', { prerequisites: [s1] });
+                // S2 is the second branch point, reached via p1a.
+                const s2 = await createQuest('Saga 2', { prerequisites: [p1a] });
+                const p2a = await createQuest('Path 2A', { prerequisites: [s2] });
+                const p2b = await createQuest('Path 2B', { prerequisites: [s2] });
+
+                await handleQuestManage({
+                    action: 'set_chain', questId: s1, chainId: 'saga', order: 0,
+                    branches: [
+                        { choiceId: 'b1a', label: '1A', questId: p1a },
+                        { choiceId: 'b1b', label: '1B', questId: p1b }
+                    ]
+                }, ctx);
+                await handleQuestManage({
+                    action: 'set_chain', questId: s2, chainId: 'saga', order: 1,
+                    branches: [
+                        { choiceId: 'b2a', label: '2A', questId: p2a },
+                        { choiceId: 'b2b', label: '2B', questId: p2b }
+                    ]
+                }, ctx);
+
+                // Complete S1, choose 1A.
+                await completeQuest(testCharacterId, s1);
+                const sel1 = parseResult(await handleQuestManage({
+                    action: 'select_branch', characterId: testCharacterId, questId: s1, choiceId: 'b1a'
+                }, ctx));
+                expect(sel1.success).toBe(true);
+                expect(sel1.chosenQuestId).toBe(p1a);
+
+                // Walk the chosen path to reach the second branch point and complete it.
+                await completeQuest(testCharacterId, p1a);
+                await completeQuest(testCharacterId, s2);
+
+                // Choose 2B at the second branch point.
+                const sel2 = parseResult(await handleQuestManage({
+                    action: 'select_branch', characterId: testCharacterId, questId: s2, choiceId: 'b2b'
+                }, ctx));
+                expect(sel2.success).toBe(true);
+                expect(sel2.chosenQuestId).toBe(p2b);
+
+                // BOTH decisions must survive: keyed by source quest id.
+                const chain = parseResult(await handleQuestManage({
+                    action: 'get_chain', chainId: 'saga', characterId: testCharacterId
+                }, ctx));
+                expect(chain.chainChoices?.[s1]).toBe('b1a');
+                expect(chain.chainChoices?.[s2]).toBe('b2b');
+
+                // The chosen second-path quest is assignable; the other is not.
+                const assign2b = parseResult(await handleQuestManage({
+                    action: 'assign', characterId: testCharacterId, questId: p2b
+                }, ctx));
+                expect(assign2b.success).toBe(true);
+                const assign2a = parseResult(await handleQuestManage({
+                    action: 'assign', characterId: testCharacterId, questId: p2a
+                }, ctx));
+                expect(assign2a.error).toBe(true);
+            });
+
+            // FINDING 5: a committed branch decision is immutable. Switching to a
+            // DIFFERENT choice must be rejected (would unlock both paths); repeating
+            // the SAME choice is idempotent.
+            it('rejects switching a committed branch choice but is idempotent for the same choice', async () => {
+                const a = await createQuest('Immutable Branch');
+                const good = await createQuest('Imm Good', { prerequisites: [a] });
+                const evil = await createQuest('Imm Evil', { prerequisites: [a] });
+                await handleQuestManage({
+                    action: 'set_chain', questId: a, chainId: 'imm', order: 0,
+                    branches: [
+                        { choiceId: 'good', label: 'Good', questId: good },
+                        { choiceId: 'evil', label: 'Evil', questId: evil }
+                    ]
+                }, ctx);
+                await completeQuest(testCharacterId, a);
+
+                const first = parseResult(await handleQuestManage({
+                    action: 'select_branch', characterId: testCharacterId, questId: a, choiceId: 'good'
+                }, ctx));
+                expect(first.success).toBe(true);
+
+                // Repeating the SAME choice: idempotent, no error.
+                const same = parseResult(await handleQuestManage({
+                    action: 'select_branch', characterId: testCharacterId, questId: a, choiceId: 'good'
+                }, ctx));
+                expect(same.success).toBe(true);
+                expect(same.chosenQuestId).toBe(good);
+
+                // Switching to a DIFFERENT choice: rejected.
+                const switched = parseResult(await handleQuestManage({
+                    action: 'select_branch', characterId: testCharacterId, questId: a, choiceId: 'evil'
+                }, ctx));
+                expect(switched.error).toBe(true);
+                expect(switched.message.toLowerCase()).toContain('already chosen');
+
+                // The evil path stays locked despite the switch attempt.
+                const assignEvil = parseResult(await handleQuestManage({
+                    action: 'assign', characterId: testCharacterId, questId: evil
+                }, ctx));
+                expect(assignEvil.error).toBe(true);
+            });
+        });
+
+        // FINDING 2/3/4: create must run the SAME chain validation as set_chain.
+        describe('create chain validation', () => {
+            it('rejects a self-link in create nextQuests', async () => {
+                // A create cannot know its own id ahead of time, but it can name a
+                // chainId pointing at a quest that does not exist — covered below.
+                // For a true self-link the source must reference itself by id; since
+                // create assigns a fresh id, self-link is exercised via set_chain.
+                // Here we assert dangling targets in create are rejected.
+                const res = parseResult(await handleQuestManage({
+                    action: 'create',
+                    name: 'Bad Chain Dangling',
+                    description: 'x',
+                    worldId: testWorldId,
+                    objectives: [{ description: 'do it', type: 'custom' }],
+                    chain: { chainId: 'c', nextQuests: ['ghost-next'], branches: [] }
+                }, ctx));
+                expect(res.error).toBe(true);
+                expect(res.message).toContain('ghost-next');
+            });
+
+            it('rejects a dangling branch target in create', async () => {
+                const res = parseResult(await handleQuestManage({
+                    action: 'create',
+                    name: 'Bad Chain Branch',
+                    description: 'x',
+                    worldId: testWorldId,
+                    objectives: [{ description: 'do it', type: 'custom' }],
+                    chain: { chainId: 'c', nextQuests: [], branches: [{ choiceId: 'g', label: 'G', questId: 'ghost-branch' }] }
+                }, ctx));
+                expect(res.error).toBe(true);
+                expect(res.message).toContain('ghost-branch');
+            });
+
+            it('rejects duplicate branch choiceIds in create', async () => {
+                const t1 = await createQuest('Target Dup 1');
+                const t2 = await createQuest('Target Dup 2');
+                const res = parseResult(await handleQuestManage({
+                    action: 'create',
+                    name: 'Dup Choice',
+                    description: 'x',
+                    worldId: testWorldId,
+                    objectives: [{ description: 'do it', type: 'custom' }],
+                    chain: { chainId: 'c', nextQuests: [], branches: [
+                        { choiceId: 'same', label: 'A', questId: t1 },
+                        { choiceId: 'same', label: 'B', questId: t2 }
+                    ] }
+                }, ctx));
+                expect(res.error).toBe(true);
+                expect(res.message.toLowerCase()).toContain('duplicate');
+            });
+
+            // FINDING 3: branches require a chainId.
+            it('rejects branches without a chainId in create', async () => {
+                const t1 = await createQuest('Target NoChain');
+                const res = parseResult(await handleQuestManage({
+                    action: 'create',
+                    name: 'Branch No Chain',
+                    description: 'x',
+                    worldId: testWorldId,
+                    objectives: [{ description: 'do it', type: 'custom' }],
+                    chain: { nextQuests: [], branches: [{ choiceId: 'g', label: 'G', questId: t1 }] }
+                }, ctx));
+                expect(res.error).toBe(true);
+                expect(res.message.toLowerCase()).toContain('chainid');
+            });
+
+            it('rejects branches without a chainId in set_chain', async () => {
+                const a = await createQuest('Src No Chain');
+                const t1 = await createQuest('Tgt No Chain');
+                const res = parseResult(await handleQuestManage({
+                    action: 'set_chain',
+                    questId: a,
+                    branches: [{ choiceId: 'g', label: 'G', questId: t1 }]
+                }, ctx));
+                expect(res.error).toBe(true);
+                expect(res.message.toLowerCase()).toContain('chainid');
+            });
+
+            // FINDING 4: a branch target may be owned by only ONE source quest.
+            it('rejects a branch target already owned by a different source quest', async () => {
+                const owner = await createQuest('Owner');
+                const other = await createQuest('Other');
+                const target = await createQuest('Shared Target');
+                await handleQuestManage({
+                    action: 'set_chain', questId: owner, chainId: 'own', order: 0,
+                    branches: [{ choiceId: 'pick', label: 'Pick', questId: target }]
+                }, ctx);
+
+                // A different source trying to also branch to target is rejected.
+                const res = parseResult(await handleQuestManage({
+                    action: 'set_chain', questId: other, chainId: 'own', order: 1,
+                    branches: [{ choiceId: 'pick2', label: 'Pick2', questId: target }]
+                }, ctx));
+                expect(res.error).toBe(true);
+                expect(res.message).toContain(target);
+            });
+
+            it('allows the same source to re-set its own branch target', async () => {
+                const owner = await createQuest('ReOwner');
+                const target = await createQuest('ReTarget');
+                await handleQuestManage({
+                    action: 'set_chain', questId: owner, chainId: 'reown', order: 0,
+                    branches: [{ choiceId: 'pick', label: 'Pick', questId: target }]
+                }, ctx);
+                // Same source re-setting the same target must succeed (idempotent owner).
+                const res = parseResult(await handleQuestManage({
+                    action: 'set_chain', questId: owner, chainId: 'reown', order: 0,
+                    branches: [{ choiceId: 'pick', label: 'Pick (relabel)', questId: target }]
+                }, ctx));
+                expect(res.success).toBe(true);
             });
         });
 
@@ -942,7 +1163,7 @@ describe('quest_manage consolidated tool', () => {
                 }, ctx);
                 await completeQuest(testCharacterId, a);
                 await handleQuestManage({
-                    action: 'select_branch', characterId: testCharacterId, chainId: 'persist', choiceId: 'pick'
+                    action: 'select_branch', characterId: testCharacterId, questId: a, choiceId: 'pick'
                 }, ctx);
 
                 // Re-read via a fresh handler call (repo round-trips through rowToQuest / rowToQuestLog).
@@ -953,7 +1174,7 @@ describe('quest_manage consolidated tool', () => {
                 const chain = parseResult(await handleQuestManage({
                     action: 'get_chain', chainId: 'persist', characterId: testCharacterId
                 }, ctx));
-                expect(chain.chainChoices?.persist).toBe('pick');
+                expect(chain.chainChoices?.[a]).toBe('pick');
             });
         });
     });

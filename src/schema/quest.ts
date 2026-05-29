@@ -51,10 +51,13 @@ export const QuestLogSchema = z.object({
     activeQuests: z.array(z.string()), // Quest IDs
     completedQuests: z.array(z.string()),
     failedQuests: z.array(z.string()),
-    // PHASE-3: per-character branch choices, keyed chainId -> chosen choiceId.
-    // Records which branch a character picked at a branching quest so only the
-    // chosen path unlocks (see select_branch in quest-manage.ts). Defaults to {}
-    // for legacy logs (back-compat on read).
+    // PHASE-3: per-character branch choices, keyed by the SOURCE (branching)
+    // quest id -> chosen choiceId. A decision belongs to its branch point, not
+    // the whole storyline, so a chain with two branching quests records both
+    // (keying by chainId would let the second overwrite the first). Records
+    // which branch a character picked at each branching quest so only the chosen
+    // path unlocks (see select_branch in quest-manage.ts). Defaults to {} for
+    // legacy logs (back-compat on read).
     chainChoices: z.record(z.string(), z.string()).default({})
 });
 
