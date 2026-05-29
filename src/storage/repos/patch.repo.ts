@@ -19,7 +19,9 @@ export class PatchRepository {
     }
 
     getHistory(): MapPatch[] {
-        const stmt = this.db.prepare('SELECT * FROM patches ORDER BY id ASC');
+        // Only the legacy op/path/value rows are MapPatches. World-scoped DSL script
+        // rows (script IS NOT NULL) are a separate record type read via getScripts. (#62)
+        const stmt = this.db.prepare('SELECT * FROM patches WHERE script IS NULL ORDER BY id ASC');
         const rows = stmt.all() as PatchRow[];
 
         return rows.map((row) =>
@@ -30,6 +32,30 @@ export class PatchRepository {
                 timestamp: row.timestamp,
             })
         );
+    }
+
+    /**
+     * Append a raw DSL map-patch script for a specific world. This is the durable,
+     * replayable mutation record used to rehydrate a world's edits on restore (#62).
+     * Stored alongside the legacy op/path/value rows; op/path are NOT NULL in the
+     * table, so sentinel values are supplied and `value` is left null.
+     */
+    logScript(worldId: string, script: string): void {
+        if (!worldId) throw new Error('logScript requires a non-empty worldId');
+        if (!script) throw new Error('logScript requires a non-empty script');
+        const stmt = this.db.prepare(`
+      INSERT INTO patches (world_id, script, op, path, value, timestamp)
+      VALUES (@worldId, @script, 'replace', '/', NULL, @timestamp)
+    `);
+        stmt.run({ worldId, script, timestamp: new Date().toISOString() });
+    }
+
+    /** Return a world's DSL map-patch scripts in application order (oldest first). (#62) */
+    getScripts(worldId: string): string[] {
+        const rows = this.db
+            .prepare('SELECT script FROM patches WHERE world_id = ? AND script IS NOT NULL ORDER BY id ASC')
+            .all(worldId) as { script: string }[];
+        return rows.map((row) => row.script);
     }
 }
 

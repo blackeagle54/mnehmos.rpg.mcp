@@ -633,6 +633,20 @@ export function migrate(db: Database.Database) {
 }
 
 function runMigrations(db: Database.Database) {
+  // Durable, world-scoped DSL map-patch log: add world_id + script columns plus an
+  // index so applied patches can be replayed per-world on restore. Both columns are
+  // NULLABLE for back-compat with the legacy op/path/value rows. (#62)
+  const patchColumns = db.prepare("PRAGMA table_info(patches)").all() as { name: string }[];
+  if (!patchColumns.some(col => col.name === 'world_id')) {
+    console.error('[Migration] Adding world_id column to patches table');
+    db.exec(`ALTER TABLE patches ADD COLUMN world_id TEXT;`);
+  }
+  if (!patchColumns.some(col => col.name === 'script')) {
+    console.error('[Migration] Adding script column to patches table');
+    db.exec(`ALTER TABLE patches ADD COLUMN script TEXT;`);
+  }
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_patches_world ON patches(world_id, id);`);
+
   // Check if character_type column exists and add it if missing
   const charColumns = db.prepare("PRAGMA table_info(characters)").all() as { name: string }[];
   const hasCharacterType = charColumns.some(col => col.name === 'character_type');
