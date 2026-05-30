@@ -8,6 +8,7 @@
 // partially-initialized ConsolidatedTools array. The previous barrel-import-FIRST
 // workaround is therefore no longer required.
 import { handleBatchManage, BatchManageTool, WORKFLOW_TEMPLATES } from '../../../src/server/consolidated/batch-manage.js';
+import { buildConsolidatedRegistry } from '../../../src/server/consolidated-registry.js';
 import { getDb, closeDb } from '../../../src/storage/index.js';
 import { CharacterRepository } from '../../../src/storage/repos/character.repo.js';
 import { PartyRepository } from '../../../src/storage/repos/party.repo.js';
@@ -1181,6 +1182,292 @@ describe('batch_manage consolidated tool', () => {
 
             const data = parseResult(result);
             expect(data.actionType).toBe('get_template');
+        });
+    });
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Phase 6 — Template library integrity & new templates
+    //
+    // MECHANICAL HONESTY: a workflow template is only useful if EVERY step
+    // references a tool the executor can actually dispatch. runSteps resolves
+    // steps against buildConsolidatedRegistry(); a template that names a tool
+    // absent from that registry produces an "Unknown tool" failure at run time.
+    // The guardrail below iterates EVERY entry in WORKFLOW_TEMPLATES (built-in
+    // AND any new ones) and asserts each step.tool is a real registry key — so a
+    // dangling tool reference is caught at test time, not in production.
+    // ─────────────────────────────────────────────────────────────────────────
+    describe('template library integrity guardrail (Phase 6)', () => {
+        it('every WORKFLOW_TEMPLATES step references a real consolidated registry tool', () => {
+            const registry = buildConsolidatedRegistry();
+            const validTools = new Set(Object.keys(registry));
+            expect(validTools.size).toBeGreaterThan(0);
+
+            const offenders: string[] = [];
+            for (const [templateId, template] of Object.entries(WORKFLOW_TEMPLATES)) {
+                expect(template.steps.length).toBeGreaterThan(0);
+                for (const step of template.steps) {
+                    if (!validTools.has(step.tool)) {
+                        offenders.push(`${templateId} → "${step.tool}"`);
+                    }
+                }
+            }
+
+            // Empty array → every step grounds to a real tool. A non-empty list
+            // names the offending template/tool pairs so the failure is actionable.
+            expect(offenders).toEqual([]);
+        });
+
+        it('every step.args carries an action (the consolidated tools are action-routed)', () => {
+            const offenders: string[] = [];
+            for (const [templateId, template] of Object.entries(WORKFLOW_TEMPLATES)) {
+                template.steps.forEach((step, i) => {
+                    const action = (step.args as Record<string, unknown>)?.action;
+                    if (typeof action !== 'string' || action.trim() === '') {
+                        offenders.push(`${templateId} step ${i + 1} (${step.tool})`);
+                    }
+                });
+            }
+            expect(offenders).toEqual([]);
+        });
+
+        // Proves the guardrail BITES: a transient template naming a non-existent
+        // tool MUST be flagged. Without this, a guardrail that never fails would
+        // give false confidence. Registered + cleaned up so it never leaks.
+        it('guardrail flags a template whose step names a non-existent tool', () => {
+            const BOGUS_ID = '__test_dangling_tool_template__';
+            WORKFLOW_TEMPLATES[BOGUS_ID] = {
+                name: 'Dangling Tool Template',
+                description: 'references a tool that is not in the registry',
+                steps: [
+                    { tool: 'totally_not_a_registered_tool', args: { action: 'noop' } }
+                ],
+                requiredParams: []
+            };
+            try {
+                const validTools = new Set(Object.keys(buildConsolidatedRegistry()));
+                const offenders: string[] = [];
+                for (const [templateId, template] of Object.entries(WORKFLOW_TEMPLATES)) {
+                    for (const step of template.steps) {
+                        if (!validTools.has(step.tool)) {
+                            offenders.push(`${templateId} → "${step.tool}"`);
+                        }
+                    }
+                }
+                expect(offenders.some(o => o.includes(BOGUS_ID))).toBe(true);
+            } finally {
+                delete WORKFLOW_TEMPLATES[BOGUS_ID];
+            }
+        });
+    });
+
+    describe('Phase 6 new templates — surface & shape', () => {
+        const NEW_TEMPLATE_IDS = [
+            'generate_settlement',
+            'populate_tavern',
+            'lotr_campaign',
+            'combat_encounter'
+        ];
+
+        const EXPECTED_REQUIRED_PARAMS: Record<string, string[]> = {
+            generate_settlement: ['settlementName', 'settlementType'],
+            populate_tavern: ['tavernName'],
+            lotr_campaign: ['worldName', 'fellowshipName'],
+            combat_encounter: ['partyId', 'encounterPreset']
+        };
+
+        it('list_templates surfaces all new Phase 6 template ids', async () => {
+            const result = await handleBatchManage({ action: 'list_templates' }, ctx);
+            const data = parseResult(result);
+            const ids = data.templates.map((t: { id: string }) => t.id);
+            for (const id of NEW_TEMPLATE_IDS) {
+                expect(ids).toContain(id);
+            }
+        });
+
+        it.each(NEW_TEMPLATE_IDS)(
+            'get_template("%s") returns non-empty steps and the expected requiredParams',
+            async (templateId) => {
+                const result = await handleBatchManage({ action: 'get_template', templateId }, ctx);
+                const data = parseResult(result);
+                expect(data.success).toBe(true);
+                expect(data.template.name).toBeTruthy();
+                expect(data.template.description).toBeTruthy();
+                expect(Array.isArray(data.template.steps)).toBe(true);
+                expect(data.template.steps.length).toBeGreaterThan(0);
+                // Sorted compare so param ORDER in the template is not load-bearing.
+                expect([...data.template.requiredParams].sort())
+                    .toEqual([...EXPECTED_REQUIRED_PARAMS[templateId]].sort());
+            }
+        );
+
+        it('populate_tavern uses exactly ONE batched create_npcs step (respects the 10-step cap)', async () => {
+            const result = await handleBatchManage({ action: 'get_template', templateId: 'populate_tavern' }, ctx);
+            const data = parseResult(result);
+            // ONE step (not 10 separate steps), and that step batches many NPCs.
+            expect(data.template.steps).toHaveLength(1);
+            const step = data.template.steps[0];
+            expect(step.tool).toBe('batch_manage');
+            expect(step.args.action).toBe('create_npcs');
+            expect(Array.isArray(step.args.npcs)).toBe(true);
+            expect(step.args.npcs.length).toBeGreaterThanOrEqual(10);
+        });
+
+        it('generate_settlement creates a location AND populates NPCs in one spawn_location step', async () => {
+            const result = await handleBatchManage({ action: 'get_template', templateId: 'generate_settlement' }, ctx);
+            const data = parseResult(result);
+            const spawnStep = data.template.steps.find(
+                (s: { tool: string; args: { action?: string } }) =>
+                    s.tool === 'spawn_manage' && s.args.action === 'spawn_location'
+            );
+            expect(spawnStep).toBeDefined();
+            expect(Array.isArray(spawnStep.args.npcs)).toBe(true);
+            expect(spawnStep.args.npcs.length).toBeGreaterThan(0);
+        });
+    });
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // END-TO-END EXECUTION: a template is only "real" if its steps actually run.
+    // Mirror the existing autoExecute test ctx/DB pattern: in-memory DB primed in
+    // beforeEach, autoExecute:true routes the template's resolved steps through
+    // the SAME shared sequence engine and we assert real side effects.
+    // ─────────────────────────────────────────────────────────────────────────
+    describe('Phase 6 new templates — end-to-end execution (autoExecute)', () => {
+        it('populate_tavern autoExecute creates ~10 NPCs in the DB via one batched step', async () => {
+            const result = await handleBatchManage({
+                action: 'execute_workflow',
+                templateId: 'populate_tavern',
+                params: { tavernName: 'The Prancing Pony' },
+                autoExecute: true,
+                stopOnError: true
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.actionType).toBe('execute_workflow');
+            expect(data.autoExecuted).toBe(true);
+            expect(data.failureCount).toBe(0);
+            // Exactly one batched step executed (NOT ten separate steps).
+            expect(data.executedSteps).toBe(1);
+            expect(data.steps[0].success).toBe(true);
+            // The batched create_npcs reported a real createdCount.
+            expect(data.stepResults.step1.createdCount).toBeGreaterThanOrEqual(10);
+
+            // Side effect: the NPCs really exist in the in-memory DB.
+            const db = getDb(':memory:');
+            const charRepo = new CharacterRepository(db);
+            const npcCount = charRepo.findAll().filter((c: { characterType?: string }) => c.characterType === 'npc').length;
+            expect(npcCount).toBeGreaterThanOrEqual(10);
+        });
+
+        it('generate_settlement autoExecute creates a populated location (NPCs persisted)', async () => {
+            const result = await handleBatchManage({
+                action: 'execute_workflow',
+                templateId: 'generate_settlement',
+                params: { settlementName: 'Bree', settlementType: 'village' },
+                autoExecute: true,
+                stopOnError: true
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.actionType).toBe('execute_workflow');
+            expect(data.failureCount).toBe(0);
+            expect(data.steps.every((s: { success: boolean }) => s.success)).toBe(true);
+
+            // The spawn_location step persisted NPCs into the DB.
+            const db = getDb(':memory:');
+            const charRepo = new CharacterRepository(db);
+            const npcCount = charRepo.findAll().filter((c: { characterType?: string }) => c.characterType === 'npc').length;
+            expect(npcCount).toBeGreaterThan(0);
+        });
+
+        it('lotr_campaign autoExecute creates world + party + starting location', async () => {
+            const result = await handleBatchManage({
+                action: 'execute_workflow',
+                templateId: 'lotr_campaign',
+                params: { worldName: 'Middle-earth', fellowshipName: 'The Fellowship' },
+                autoExecute: true,
+                stopOnError: true
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.actionType).toBe('execute_workflow');
+            expect(data.failureCount).toBe(0);
+            expect(data.steps.every((s: { success: boolean }) => s.success)).toBe(true);
+
+            // The party step actually created the fellowship.
+            const db = getDb(':memory:');
+            const partyRepo = new PartyRepository(db);
+            const names = partyRepo.findAll().map(p => p.name);
+            expect(names).toContain('The Fellowship');
+        });
+
+        it('combat_encounter autoExecute spawns a preset encounter and returns the party context', async () => {
+            // combat_encounter's first step (spawn_encounter) needs a REAL partyId so
+            // the party's members are pulled in as the encounter's allies, and the
+            // second step (get_context) reads that party's state. The batch-manage
+            // beforeEach only seeds a lone character, so build the party (with that
+            // character as its leader member) here, mirroring the session-manage
+            // e2e setup pattern. getDb(':memory:') returns the SAME primed DB the
+            // executor will dispatch against.
+            const db = getDb(':memory:');
+            const now = new Date().toISOString();
+            const partyRepo = new PartyRepository(db);
+            const partyId = randomUUID();
+            partyRepo.create({
+                id: partyId,
+                name: 'Strike Team',
+                createdAt: now,
+                updatedAt: now
+            } as any);
+            partyRepo.addMember({
+                id: randomUUID(),
+                partyId,
+                characterId: testCharacterId,
+                role: 'leader',
+                isActive: true,
+                position: 0,
+                sharePercentage: 100,
+                joinedAt: now,
+                notes: ''
+            } as any);
+
+            const result = await handleBatchManage({
+                action: 'execute_workflow',
+                templateId: 'combat_encounter',
+                params: { partyId, encounterPreset: 'goblin_ambush' },
+                autoExecute: true,
+                stopOnError: true
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.actionType).toBe('execute_workflow');
+            expect(data.autoExecuted).toBe(true);
+            expect(data.failureCount).toBe(0);
+            // BOTH steps ran and succeeded (NOT just the first).
+            expect(data.executedSteps).toBe(2);
+            expect(data.steps.every((s: { success: boolean }) => s.success)).toBe(true);
+
+            // Step 1 (spawn_encounter) really spawned the 'goblin_ambush' preset:
+            // a non-empty roster that includes at least one enemy goblin and the
+            // party's member as a (non-enemy) ally.
+            const spawn = data.stepResults.step1;
+            expect(spawn.actionType).toBe('spawn_encounter');
+            expect(spawn.encounterId).toBeTruthy();
+            expect(spawn.preset).toBe('goblin_ambush');
+            expect(Array.isArray(spawn.participants)).toBe(true);
+            expect(spawn.participants.some((p: { isEnemy: boolean }) => p.isEnemy === true)).toBe(true);
+            expect(spawn.participants.some((p: { id: string }) => p.id === testCharacterId)).toBe(true);
+
+            // Step 2 (get_context) returned THIS party's context (not some other party).
+            const context = data.stepResults.step2;
+            expect(context.actionType).toBe('get_context');
+            expect(context.party.id).toBe(partyId);
+            expect(context.party.name).toBe('Strike Team');
+            expect(context.party.members.some((m: { id: string }) => m.id === testCharacterId)).toBe(true);
+
+            // Side effect: the encounter and its enemy goblins were persisted.
+            const charRepo = new CharacterRepository(db);
+            const enemyCount = charRepo.findAll().filter((c: { characterType?: string }) => c.characterType === 'enemy').length;
+            expect(enemyCount).toBeGreaterThan(0);
         });
     });
 
