@@ -639,7 +639,13 @@ export class CombatEngine {
         // legacy (this is what keeps the existing suite green). We compute an
         // effective DC locally and NEVER mutate target.ac.
         let cover: CoverLevel = 'none';
-        if (actor.position && target.position && this.state.props && this.state.props.length > 0) {
+        // Cover features = explicit cover props OR solid terrain obstacles (walls).
+        // Either source can grant cover; otherwise cover is 'none' and behavior is
+        // identical to legacy (keeps the existing suite green).
+        const hasCoverFeatures =
+            (this.state.props?.length ?? 0) > 0 ||
+            (this.state.terrain?.obstacles?.length ?? 0) > 0;
+        if (actor.position && target.position && hasCoverFeatures) {
             cover = determineCover(this.state, actor.position, target.position);
         }
         const coverIsFull = cover === 'full';

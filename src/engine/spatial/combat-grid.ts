@@ -707,23 +707,29 @@ const COVER_RANK: Record<CoverLevel, number> = {
  * Complexity: O(d + p) where d=line length, p=number of props
  */
 export function determineCover(
-    state: Pick<CombatState, 'props'>,
+    state: Pick<CombatState, 'props' | 'terrain'>,
     fromPos: Position,
     toPos: Position
 ): CoverLevel {
-    const props = state.props;
-    if (!props || props.length === 0) return 'none';
-
-    // Index cover-providing props by tile for O(1) lookup along the line.
-    // Only props that actually grant cover (half/three_quarter/full) count.
+    // Index cover-granting tiles for O(1) lookup along the line. TWO unified
+    // sources, so attack cover stays consistent with hasLineOfSight() / AoE LoS:
+    //   • explicit cover props (half / three_quarter / full)
+    //   • terrain.obstacles (solid walls) → treated as FULL cover
     const coverByTile = new Map<string, CoverLevel>();
-    for (const prop of props) {
-        const cover = prop.cover;
-        if (!cover || cover === 'none') continue;
-        const existing = coverByTile.get(prop.position);
+    const raise = (key: string, cover: CoverLevel) => {
+        const existing = coverByTile.get(key);
         if (existing === undefined || COVER_RANK[cover] > COVER_RANK[existing]) {
-            coverByTile.set(prop.position, cover);
+            coverByTile.set(key, cover);
         }
+    };
+    for (const prop of state.props ?? []) {
+        const cover = prop.cover;
+        // Guard prop.position: props are not runtime-validated to carry one.
+        if (!cover || cover === 'none' || !prop.position) continue;
+        raise(prop.position, cover);
+    }
+    for (const obs of state.terrain?.obstacles ?? []) {
+        raise(obs, 'full'); // a solid obstacle blocks the line entirely
     }
     if (coverByTile.size === 0) return 'none';
 
@@ -734,6 +740,10 @@ export function determineCover(
     );
 
     // Walk the interior of the line (exclude endpoints: attacker + target tiles).
+    // SIMPLIFICATION: uses the combatants' ANCHOR tiles only — a multi-tile
+    // (Large+) creature's size footprint is NOT corner-to-corner traced; cover is
+    // resolved from one centre line (same tile-based simplification as the 5e
+    // corner rule noted in cover.test.ts).
     let best: CoverLevel = 'none';
     for (let i = 1; i < line.length - 1; i++) {
         const key = `${line[i].x},${line[i].y}`;

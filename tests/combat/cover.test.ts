@@ -56,6 +56,12 @@ describe('Cover applied to attack resolution', () => {
             expect(determineCover(state, { x: 0, y: 0 }, { x: 6, y: 0 })).toBe('half');
         });
 
+        it('treats a terrain obstacle between the tiles as FULL cover (consistent with hasLineOfSight/AoE)', () => {
+            const { state } = buildEngine();
+            state.terrain = { obstacles: ['3,0'] }; // solid wall on the line, no cover props
+            expect(determineCover(state, { x: 0, y: 0 }, { x: 6, y: 0 })).toBe('full');
+        });
+
         it('returns "three_quarter" for a three-quarter-cover prop between the tiles', () => {
             const { state } = buildEngine([
                 { id: 'wall', position: '3,0', label: 'Low Wall', propType: 'cover', cover: 'three_quarter' }

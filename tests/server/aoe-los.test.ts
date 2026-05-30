@@ -92,4 +92,15 @@ describe('AoE respects line-of-sight', () => {
         expect(names).toContain('Sheltered Goblin');
         expect(names).toContain('Exposed Goblin');
     });
+
+    it('does NOT treat THREE-QUARTER cover as an AoE LoS blocker (only FULL cover blocks area reach)', () => {
+        const state = buildState([
+            { id: 'rampart', position: '3,0', label: 'Rampart', propType: 'cover', cover: 'three_quarter' }
+        ]);
+        const result = calculateAoE(state, 'circle', { x: 0, y: 0 }, { radius: 8 });
+        const names = result.affectedParticipants.map(p => p.name);
+        // Three-quarter cover raises AC on attacks but does NOT block an area spell.
+        expect(names).toContain('Sheltered Goblin');
+        expect(names).toContain('Exposed Goblin');
+    });
 });
