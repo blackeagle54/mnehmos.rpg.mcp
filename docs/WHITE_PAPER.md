@@ -192,13 +192,14 @@ surface consolidated into **36 action-routed tools** (`*_manage`, `combat_action
 | **Observation** | `spatial_manage` (`look`) | See local entities and terrain. |
 | | `character_manage` / `npc_manage` (`list` / `get`) | Find specific entities by criteria. |
 | **Action** | action-routed tools (`combat_action`, `spatial_manage`/`move`, `travel_manage`, …) | Move, attack, interact (generic intent). |
+| **Combat** | `combat_manage` (`create` / `end`), `combat_map` (`render` / `aoe` / `place_prop`) | Run encounters; render the battlemap + areas of effect. |
 | **World** | `world_manage` (`generate`) | Generate a new world seed. |
 | | `strategy_manage` (`resolve_turn`) | Advance the nation-sim turn. |
 | **Math** | `math_manage` (`roll`) | `2d6+3` with advantage. |
 | | `math_manage` (`probability`) | Chance of success analysis. |
 | | `math_manage` (`projectile`) | Trajectory calculation. |
 | **Inventory** | `inventory_manage` (`equip`) | Wear armor/weapons. |
-| | `inventory_manage` | Move items between entities. |
+| | `inventory_manage` (`transfer`) | Move items between entities. |
 
 ---
 
