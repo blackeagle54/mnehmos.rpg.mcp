@@ -535,7 +535,10 @@ export function calculateAoE(
     }
     if (state.props) {
         for (const prop of state.props) {
-            if (prop.cover === 'full') blockers.add(prop.position);
+            // Guard prop.position: state.props entries are not runtime-validated to
+            // carry a position, and adding `undefined` to the blocker set would
+            // corrupt the line-of-sight check.
+            if (prop.cover === 'full' && prop.position) blockers.add(prop.position);
         }
     }
 

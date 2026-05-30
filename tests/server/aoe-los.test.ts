@@ -69,4 +69,27 @@ describe('AoE respects line-of-sight', () => {
         expect(names).toContain('Sheltered Goblin');
         expect(names).toContain('Exposed Goblin');
     });
+
+    it('does NOT block a target when the only full-cover prop sits ON the target tile (endpoints excluded)', () => {
+        const state = buildState([
+            // Full-cover prop AT the sheltered goblin's own tile (6,0) — the LoS endpoint.
+            { id: 'on-target', position: '6,0', label: 'Pillar', propType: 'cover', cover: 'full' }
+        ]);
+        const result = calculateAoE(state, 'circle', { x: 0, y: 0 }, { radius: 8 });
+        const names = result.affectedParticipants.map(p => p.name);
+        // A blocker AT the endpoint must not shield the target — it IS the target's tile.
+        expect(names).toContain('Sheltered Goblin');
+        expect(names).toContain('Exposed Goblin');
+    });
+
+    it('does NOT block when the only full-cover prop sits ON the AoE origin tile (endpoints excluded)', () => {
+        const state = buildState([
+            { id: 'on-origin', position: '0,0', label: 'Brazier', propType: 'cover', cover: 'full' }
+        ]);
+        const result = calculateAoE(state, 'circle', { x: 0, y: 0 }, { radius: 8 });
+        const names = result.affectedParticipants.map(p => p.name);
+        // A blocker at the origin endpoint must not shield everyone in the area.
+        expect(names).toContain('Sheltered Goblin');
+        expect(names).toContain('Exposed Goblin');
+    });
 });
