@@ -649,6 +649,58 @@ describe('batch_manage consolidated tool', () => {
                 delete WORKFLOW_TEMPLATES[NESTED_ID];
             }
         });
+
+        // CodeRabbit round-4 @498 (Minor): the template {{param}} substitution must
+        // NOT hijack inter-step {{stepId.prop}} references. A ref like
+        // {{A.party.id}} contains a `.` (or `[`), so it is NEVER a plain caller
+        // param — it must pass through the template pass UNCHANGED so the shared
+        // executor's {{stepId.prop}} resolver can read it at run time. Only a plain
+        // {{name}} (no `.`/`[`) that is an ACTUAL supplied param is substituted here.
+        //
+        // The trap: if a caller happened to also supply a param literally named
+        // "A.party.id" (or the substitution ignored the dot), the template pass
+        // could clobber the inter-step ref before the executor saw it. We author an
+        // explicit step id "A", and a plain {{partyName}} caller param, so:
+        //   - {{partyName}} (plain, supplied) → substituted to the caller's value
+        //   - {{A.party.id}} (inter-step ref, has a dot) → left intact, resolved by
+        //     the executor to step A's real party id → step B's get succeeds.
+        it('template-param pass does NOT hijack inter-step {{stepId.prop}} refs (only plain supplied params)', async () => {
+            const REF_VS_PARAM_ID = '__test_ref_vs_param_workflow__';
+            WORKFLOW_TEMPLATES[REF_VS_PARAM_ID] = {
+                name: 'Ref vs Param Workflow',
+                description: 'step A uses plain {{partyName}} caller param; step B uses inter-step {{A.party.id}} ref',
+                steps: [
+                    { tool: 'party_manage', args: { action: 'create', name: '{{partyName}}' }, id: 'A' },
+                    { tool: 'party_manage', args: { action: 'get', partyId: '{{A.party.id}}' }, id: 'B' }
+                ],
+                requiredParams: ['partyName']
+            } as (typeof WORKFLOW_TEMPLATES)[string];
+            try {
+                const result = await handleBatchManage({
+                    action: 'execute_workflow',
+                    templateId: REF_VS_PARAM_ID,
+                    // A param literally named like the inter-step ref MUST NOT be used
+                    // for substitution (key has a dot → not a plain param), so the
+                    // {{A.party.id}} ref stays intact for the executor.
+                    params: { partyName: 'RefVsParamParty', 'A.party.id': 'POISON-SHOULD-NOT-WIN' },
+                    autoExecute: true,
+                    stopOnError: true
+                }, ctx);
+
+                const data = parseResult(result);
+                expect(data.actionType).toBe('execute_workflow');
+                expect(data.executedSteps).toBe(2);
+                expect(data.failureCount).toBe(0);
+                // Plain {{partyName}} was substituted with the caller's value.
+                expect(data.stepResults.A.party.name).toBe('RefVsParamParty');
+                // {{A.party.id}} passed through the template pass intact and was
+                // resolved by the executor to step A's REAL party id (not poisoned).
+                expect(data.stepResults.B.id).toBe(data.stepResults.A.party.id);
+                expect(data.stepResults.B.name).toBe('RefVsParamParty');
+            } finally {
+                delete WORKFLOW_TEMPLATES[REF_VS_PARAM_ID];
+            }
+        });
     });
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -923,6 +975,122 @@ describe('batch_manage consolidated tool', () => {
                 expect(names).not.toContain('WorkflowMustNotRun');
             } finally {
                 delete WORKFLOW_TEMPLATES[FAIL_SF_ID];
+            }
+        });
+
+        // CodeRabbit round-4 @852 (Major): the shared runSteps executor must
+        // re-apply the 10-step cap that execute_sequence's Zod schema enforced.
+        // The refactor routes execute_workflow (template) through runSteps, which
+        // bypasses that schema — so a TEMPLATE with >10 steps would run uncapped.
+        // The guard lives at the top of runSteps (before any step executes) and
+        // throws; callers convert it into an error:true envelope with NO partial run.
+        it('rejects an execute_workflow TEMPLATE with >10 steps (at most 10) — no execution', async () => {
+            const TOO_MANY_ID = '__test_too_many_steps_workflow__';
+            // 11 party-create steps. Each is a real, individually-valid step, so the
+            // ONLY thing that can reject this is the step-count guard inside runSteps
+            // (the template path skips the execute_sequence Zod `.max(10)`).
+            WORKFLOW_TEMPLATES[TOO_MANY_ID] = {
+                name: 'Too Many Steps Workflow',
+                description: '11 steps — exceeds the 10-step cap',
+                steps: Array.from({ length: 11 }, (_, i) => ({
+                    tool: 'party_manage',
+                    args: { action: 'create', name: `OverCap${i}` }
+                })),
+                requiredParams: []
+            } as (typeof WORKFLOW_TEMPLATES)[string];
+            try {
+                const result = await handleBatchManage({
+                    action: 'execute_workflow',
+                    templateId: TOO_MANY_ID,
+                    autoExecute: true,
+                    stopOnError: true
+                }, ctx);
+
+                const data = parseResult(result);
+                // Rejected up front: error envelope, no steps executed.
+                expect(data.error).toBe(true);
+                const text = result.content[0].text;
+                expect(text).toContain('at most 10 steps');
+
+                // No party was created — execution never began.
+                const db = getDb(':memory:');
+                const partyRepo = new PartyRepository(db);
+                const names = partyRepo.findAll().map(p => p.name);
+                for (let i = 0; i < 11; i++) {
+                    expect(names).not.toContain(`OverCap${i}`);
+                }
+            } finally {
+                delete WORKFLOW_TEMPLATES[TOO_MANY_ID];
+            }
+        });
+
+        // The ≤10 path is unchanged: a 10-step workflow runs all the way through.
+        it('a 10-step execute_workflow TEMPLATE still runs (boundary: exactly 10 is allowed)', async () => {
+            const EXACTLY_TEN_ID = '__test_exactly_ten_steps_workflow__';
+            WORKFLOW_TEMPLATES[EXACTLY_TEN_ID] = {
+                name: 'Exactly Ten Steps Workflow',
+                description: '10 steps — at the cap, must run',
+                steps: Array.from({ length: 10 }, (_, i) => ({
+                    tool: 'party_manage',
+                    args: { action: 'create', name: `AtCap${i}` }
+                })),
+                requiredParams: []
+            } as (typeof WORKFLOW_TEMPLATES)[string];
+            try {
+                const result = await handleBatchManage({
+                    action: 'execute_workflow',
+                    templateId: EXACTLY_TEN_ID,
+                    autoExecute: true,
+                    stopOnError: true
+                }, ctx);
+
+                const data = parseResult(result);
+                expect(data.error).toBeUndefined();
+                expect(data.executedSteps).toBe(10);
+                expect(data.failureCount).toBe(0);
+
+                const db = getDb(':memory:');
+                const partyRepo = new PartyRepository(db);
+                const names = partyRepo.findAll().map(p => p.name);
+                for (let i = 0; i < 10; i++) {
+                    expect(names).toContain(`AtCap${i}`);
+                }
+            } finally {
+                delete WORKFLOW_TEMPLATES[EXACTLY_TEN_ID];
+            }
+        });
+
+        // execute_sequence (steps array) with 11 entries is rejected before any
+        // run — the schema caps at 10. The shared runSteps guard is a belt-and-
+        // suspenders backstop for the same invariant on this path too.
+        it('rejects an execute_sequence with >10 steps before any execution', async () => {
+            const elevenSteps = Array.from({ length: 11 }, (_, i) => ({
+                tool: 'party_manage',
+                args: { action: 'create', name: `SeqOverCap${i}` }
+            }));
+
+            // The input schema caps steps at 10 (z.array(...).max(10)), so the call
+            // is rejected at parse time. Either surfacing path (thrown ZodError or
+            // an error envelope) proves "no execution"; we assert nothing ran.
+            let threw = false;
+            try {
+                const result = await handleBatchManage({
+                    action: 'execute_sequence',
+                    steps: elevenSteps
+                }, ctx);
+                const data = parseResult(result);
+                expect(data.error).toBeTruthy();
+            } catch {
+                threw = true;
+            }
+            expect(threw || true).toBe(true);
+
+            // No party from the over-cap sequence was created.
+            const db = getDb(':memory:');
+            const partyRepo = new PartyRepository(db);
+            const names = partyRepo.findAll().map(p => p.name);
+            for (let i = 0; i < 11; i++) {
+                expect(names).not.toContain(`SeqOverCap${i}`);
             }
         });
     });

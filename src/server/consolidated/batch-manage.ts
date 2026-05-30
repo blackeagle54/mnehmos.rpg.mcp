@@ -493,8 +493,19 @@ async function handleExecuteWorkflow(input: BatchManageInput, _ctx: SessionConte
             value.startsWith('{{') &&
             value.endsWith('}}')
         ) {
-            const key = value.slice(2, -2);
-            return Object.prototype.hasOwnProperty.call(params, key) ? params[key] : value;
+            // Only treat `{{key}}` as a CALLER PARAM when `key` is a plain name
+            // (no `.`, no `[`) AND is an actually-supplied param. Inter-step
+            // references contain a `.`/`[` (e.g. `{{A.party.id}}`,
+            // `{{A.created[0].id}}`); substituting those here would clobber the
+            // reference with a caller value (or `undefined`) BEFORE the shared
+            // executor's {{stepId.prop}} resolver ever sees it, so cross-step
+            // passing through the workflow path would silently break.
+            // (CodeRabbit round-4 @498 — Minor.)
+            const key = value.slice(2, -2).trim();
+            const isCallerParam =
+                !key.includes('.') && !key.includes('[') &&
+                Object.prototype.hasOwnProperty.call(params, key) && params[key] !== undefined;
+            return isCallerParam ? params[key] : value;
         }
         if (Array.isArray(value)) {
             return value.map(resolveTemplateValue);
@@ -851,6 +862,16 @@ async function runSteps(
     const { buildConsolidatedRegistry } = await import('../consolidated-registry.js');
     const registry = buildConsolidatedRegistry();
     const { stopOnError } = options;
+
+    // Re-apply the 10-step cap in the SHARED executor. execute_sequence enforced
+    // this via its Zod schema (steps.max(10)), but execute_workflow routes a
+    // TEMPLATE's steps straight through runSteps and bypasses that schema — so a
+    // template with >10 steps would otherwise run uncapped. Throw BEFORE any step
+    // executes; callers convert this into a BATCH_MANAGE error envelope (error:true)
+    // with NO partial run. (CodeRabbit round-4 @852 — Major.)
+    if (steps.length > 10) {
+        throw new Error('execute_sequence supports at most 10 steps');
+    }
 
     // Reject duplicate NORMALIZED step ids BEFORE executing anything. Each step's
     // id is `step.id || stepN`, and that id keys stepResults — so a collision
