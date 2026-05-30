@@ -495,9 +495,18 @@ function renderGrid(state: CombatState, options?: { width?: number; height?: num
 }
 
 /**
- * Calculate which tiles and participants are affected by an Area of Effect
+ * Calculate which tiles and participants are affected by an Area of Effect.
+ *
+ * After tile-membership filtering, a participant is additionally dropped if it
+ * does NOT have line of sight from the AoE `origin` (e.g. it sits behind a
+ * full-cover wall or a terrain obstacle). LoS blockers are sourced from:
+ *   - full-cover props (state.props where cover === 'full')
+ *   - terrain obstacles (state.terrain.obstacles), if present
+ * With no blockers, behavior is identical to tile-membership-only filtering.
+ *
+ * Exported for direct unit testing of the LoS behavior.
  */
-function calculateAoE(
+export function calculateAoE(
     state: CombatState,
     shape: 'circle' | 'cone' | 'line',
     origin: { x: number; y: number },
@@ -517,10 +526,29 @@ function calculateAoE(
         tiles = spatial.getLineTiles(origin, { x: endX, y: endY });
     }
 
-    // Find participants in affected tiles
+    // Build the LoS blocker set: full-cover props + terrain obstacles.
+    // Only full cover (and solid obstacles) block an area spell's reach; half /
+    // three-quarter cover does not exclude a creature from the area.
+    const blockers = new Set<string>();
+    if (state.terrain?.obstacles) {
+        for (const obs of state.terrain.obstacles) blockers.add(obs);
+    }
+    if (state.props) {
+        for (const prop of state.props) {
+            // Guard prop.position: state.props entries are not runtime-validated to
+            // carry a position, and adding `undefined` to the blocker set would
+            // corrupt the line-of-sight check.
+            if (prop.cover === 'full' && prop.position) blockers.add(prop.position);
+        }
+    }
+
+    // Find participants in affected tiles, then drop any that lack line of sight
+    // from the origin (blocked by a full-cover prop / obstacle between them).
     const tileSet = new Set(tiles.map(t => `${t.x},${t.y}`));
     const affectedParticipants = state.participants
         .filter(p => p.position && tileSet.has(`${p.position.x},${p.position.y}`) && p.hp > 0)
+        .filter(p => blockers.size === 0
+            || spatial.hasLineOfSight(origin, { x: p.position!.x, y: p.position!.y }, blockers))
         .map(p => ({ id: p.id, name: p.name, position: p.position! }));
 
     return { tiles, affectedParticipants };

@@ -671,6 +671,91 @@ export function getParticipantsInLine(
     return { affectedTiles, affectedParticipants };
 }
 
+/** Cover level a target can benefit from (D&D 5e). */
+export type CoverLevel = 'none' | 'half' | 'three_quarter' | 'full';
+
+/** Rank used to compare cover levels (higher = more protective). */
+const COVER_RANK: Record<CoverLevel, number> = {
+    none: 0,
+    half: 1,
+    three_quarter: 2,
+    full: 3,
+};
+
+/**
+ * Determine the cover a target receives from cover-providing props that lie on
+ * the line between the attacker tile and the target tile.
+ *
+ * Returns the HIGHEST cover level among props strictly between the two tiles
+ * (the attacker's and the target's own tiles are excluded). Returns 'none' when
+ * there are no intervening cover props.
+ *
+ * SIMPLIFICATION (documented): D&D 5e determines cover by tracing lines from
+ * each corner of the attacker's square to every corner of the target's square
+ * (the "corner rule"). This engine uses a single Bresenham line between the two
+ * tile centers (the same primitive used for line-of-sight) and treats any
+ * cover-providing prop on that line as granting its cover. This is a reasonable
+ * tile-based approximation that is deterministic and consistent with how the
+ * rest of the spatial system reasons about lines. Edge nuances (true corner
+ * rules, diagonal grazing) are intentionally out of scope here.
+ *
+ * @param state Combat state carrying `props` (cover-providing objects)
+ * @param fromPos Attacker tile
+ * @param toPos Target tile
+ * @returns The highest applicable cover level, or 'none'
+ *
+ * Complexity: O(d + p) where d=line length, p=number of props
+ */
+export function determineCover(
+    state: Pick<CombatState, 'props' | 'terrain'>,
+    fromPos: Position,
+    toPos: Position
+): CoverLevel {
+    // Index cover-granting tiles for O(1) lookup along the line. TWO unified
+    // sources, so attack cover stays consistent with hasLineOfSight() / AoE LoS:
+    //   • explicit cover props (half / three_quarter / full)
+    //   • terrain.obstacles (solid walls) → treated as FULL cover
+    const coverByTile = new Map<string, CoverLevel>();
+    const raise = (key: string, cover: CoverLevel) => {
+        const existing = coverByTile.get(key);
+        if (existing === undefined || COVER_RANK[cover] > COVER_RANK[existing]) {
+            coverByTile.set(key, cover);
+        }
+    };
+    for (const prop of state.props ?? []) {
+        const cover = prop.cover;
+        // Guard prop.position: props are not runtime-validated to carry one.
+        if (!cover || cover === 'none' || !prop.position) continue;
+        raise(prop.position, cover);
+    }
+    for (const obs of state.terrain?.obstacles ?? []) {
+        raise(obs, 'full'); // a solid obstacle blocks the line entirely
+    }
+    if (coverByTile.size === 0) return 'none';
+
+    const engine = new SpatialEngine();
+    const line = engine.getLineTiles(
+        { x: fromPos.x, y: fromPos.y },
+        { x: toPos.x, y: toPos.y }
+    );
+
+    // Walk the interior of the line (exclude endpoints: attacker + target tiles).
+    // SIMPLIFICATION: uses the combatants' ANCHOR tiles only — a multi-tile
+    // (Large+) creature's size footprint is NOT corner-to-corner traced; cover is
+    // resolved from one centre line (same tile-based simplification as the 5e
+    // corner rule noted in cover.test.ts).
+    let best: CoverLevel = 'none';
+    for (let i = 1; i < line.length - 1; i++) {
+        const key = `${line[i].x},${line[i].y}`;
+        const cover = coverByTile.get(key);
+        if (cover && COVER_RANK[cover] > COVER_RANK[best]) {
+            best = cover;
+            if (best === 'full') break; // cannot get higher
+        }
+    }
+    return best;
+}
+
 /**
  * Check line of sight from caster to target.
  *
