@@ -14,7 +14,6 @@ import { CharacterRepository } from '../../storage/repos/character.repo.js';
 import { InventoryRepository } from '../../storage/repos/inventory.repo.js';
 import { ItemRepository } from '../../storage/repos/item.repo.js';
 import { SessionContext } from '../types.js';
-import { buildConsolidatedRegistry } from '../consolidated-registry.js';
 import { ToolContract } from '../tool-metadata.js';
 
 export interface McpResponse {
@@ -69,17 +68,29 @@ function ensureDb() {
 }
 
 // Workflow templates
-const WORKFLOW_TEMPLATES: Record<string, {
+// Exported so tests can register transient templates (e.g. an intentionally
+// failing step) to exercise the auto-execute path without polluting the
+// built-in template set at runtime.
+export const WORKFLOW_TEMPLATES: Record<string, {
     name: string;
     description: string;
-    steps: Array<{ tool: string; args: Record<string, any> }>;
+    // `id` is optional and, when present, is PRESERVED through to runSteps so
+    // inter-step {{thatId.prop}} references can target a template-authored id
+    // (not just the positional `step{n}` default).
+    steps: Array<{ tool: string; args: Record<string, any>; id?: string }>;
     requiredParams: string[];
 }> = {
     'start_campaign': {
         name: 'Start Campaign',
         description: 'Create a new world, party, and starting location',
+        // world_manage `generate` requires seed/width/height (GenerateSchema). The
+        // previous template omitted width/height and left seed as an unsupplied
+        // {{seed}} param, so the step ALWAYS failed validation — a failure that
+        // was silently masked while the executor mis-parsed every result as
+        // { raw: text } (fake success). With the result parser fixed, the step
+        // is supplied valid defaults so the workflow runs end to end.
         steps: [
-            { tool: 'world_manage', args: { action: 'generate', name: '{{worldName}}', seed: '{{seed}}' } },
+            { tool: 'world_manage', args: { action: 'generate', seed: '{{worldName}}', width: 50, height: 50 } },
             { tool: 'party_manage', args: { action: 'create', name: '{{partyName}}' } },
             { tool: 'spawn_manage', args: { action: 'spawn_preset_location', preset: 'generic_tavern' } }
         ],
@@ -156,6 +167,8 @@ const BatchManageInputSchema = z.object({
     // workflow fields
     templateId: z.string().optional().describe('Workflow template ID'),
     params: z.record(z.string(), z.any()).optional().describe('Template parameters'),
+    autoExecute: z.boolean().optional().default(false)
+        .describe('execute_workflow: if true, actually run the resolved steps through the sequence engine. Default false = prepare-only (returns resolved steps without running them).'),
 
     // execute_sequence fields
     steps: z.array(z.object({
@@ -438,9 +451,14 @@ async function handleExecuteWorkflow(input: BatchManageInput, _ctx: SessionConte
         };
     }
 
-    // Check required params
+    // Check required params. Test for key PRESENCE, not truthiness: `!params[p]`
+    // would reject legitimately-supplied falsy values (0, false, ''), so a
+    // template whose required param is meant to be `0`/`false`/`''` could never
+    // run. A param counts as supplied when the key exists and is not `undefined`.
     const params = input.params || {};
-    const missingParams = template.requiredParams.filter(p => !params[p]);
+    const missingParams = template.requiredParams.filter(
+        p => !Object.prototype.hasOwnProperty.call(params, p) || params[p] === undefined
+    );
     if (missingParams.length > 0) {
         return {
             content: [{
@@ -456,19 +474,127 @@ async function handleExecuteWorkflow(input: BatchManageInput, _ctx: SessionConte
         };
     }
 
-    // Substitute parameters in steps
-    const resolvedSteps = template.steps.map(step => {
-        const resolvedArgs: Record<string, any> = {};
-        for (const [key, value] of Object.entries(step.args)) {
-            if (typeof value === 'string' && value.startsWith('{{') && value.endsWith('}}')) {
-                const paramName = value.slice(2, -2);
-                resolvedArgs[key] = params[paramName];
-            } else {
-                resolvedArgs[key] = value;
-            }
+    // Substitute template {{param}} placeholders with the caller's params BEFORE
+    // execution. Only placeholders that name an ACTUAL caller param are
+    // substituted here; anything else (notably inter-step {{stepId.prop}}
+    // references) is left intact so the shared executor can resolve it later
+    // during the run. Previously this pass clobbered EVERY `{{...}}` string,
+    // turning inter-step references into `undefined` before the executor ever
+    // saw them — so cross-step passing never worked through the workflow path.
+    // Deeply substitute caller {{param}} placeholders inside args, walking
+    // nested objects AND arrays (the previous pass only handled top-level string
+    // args, so a {{partyName}} nested one level deep never resolved). A pure
+    // `{{name}}` string is replaced only when `name` is an ACTUAL caller param;
+    // anything else (notably inter-step {{stepId.prop}} references, which are NOT
+    // caller params) is left intact for the shared executor to resolve at run time.
+    const resolveTemplateValue = (value: unknown): unknown => {
+        if (
+            typeof value === 'string' &&
+            value.startsWith('{{') &&
+            value.endsWith('}}')
+        ) {
+            // Only treat `{{key}}` as a CALLER PARAM when `key` is a plain name
+            // (no `.`, no `[`) AND is an actually-supplied param. Inter-step
+            // references contain a `.`/`[` (e.g. `{{A.party.id}}`,
+            // `{{A.created[0].id}}`); substituting those here would clobber the
+            // reference with a caller value (or `undefined`) BEFORE the shared
+            // executor's {{stepId.prop}} resolver ever sees it, so cross-step
+            // passing through the workflow path would silently break.
+            // (CodeRabbit round-4 @498 — Minor.)
+            const key = value.slice(2, -2).trim();
+            const isCallerParam =
+                !key.includes('.') && !key.includes('[') &&
+                Object.prototype.hasOwnProperty.call(params, key) && params[key] !== undefined;
+            return isCallerParam ? params[key] : value;
         }
-        return { tool: step.tool, args: resolvedArgs };
-    });
+        if (Array.isArray(value)) {
+            return value.map(resolveTemplateValue);
+        }
+        if (value && typeof value === 'object') {
+            return Object.fromEntries(
+                Object.entries(value as Record<string, unknown>).map(
+                    ([k, v]) => [k, resolveTemplateValue(v)]
+                )
+            );
+        }
+        return value;
+    };
+
+    // Preserve any template-authored step `id` so inter-step {{id.prop}}
+    // references can target it; runSteps falls back to `step{n}` when absent.
+    const resolvedSteps = template.steps.map(step => ({
+        tool: step.tool,
+        id: step.id,
+        args: resolveTemplateValue(step.args) as Record<string, unknown>
+    }));
+
+    // Opt-in auto-execute: route the resolved steps through the SAME engine
+    // execute_sequence uses. Default (autoExecute=false) preserves the original
+    // prepare-only / dry-run behavior for backward compatibility.
+    if (input.autoExecute) {
+        const stopOnError = input.stopOnError ?? true;
+
+        let output = RichFormatter.header(`Workflow: ${template.name}`, '⚙️');
+        output += `*${template.description}*\n\n`;
+        output += `*Auto-executing ${resolvedSteps.length} step(s)...*\n\n`;
+
+        // runSteps rejects duplicate normalized step ids up front (before any
+        // step runs). Surface that as a BATCH_MANAGE error envelope; nothing was
+        // partially executed. actionType stays 'execute_workflow' (the caller's
+        // action identity), consistent with the success path below.
+        let run: RunStepsResult;
+        try {
+            run = await runSteps(resolvedSteps as RunnableStep[], _ctx, { stopOnError });
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            return {
+                content: [{
+                    type: 'text',
+                    text: RichFormatter.error(message) +
+                        RichFormatter.embedJson({
+                            error: true,
+                            message,
+                            actionType: 'execute_workflow',
+                            templateId: input.templateId,
+                            templateName: template.name
+                        }, 'BATCH_MANAGE')
+                }]
+            };
+        }
+        output += run.output;
+
+        output += RichFormatter.section('Summary');
+        output += RichFormatter.keyValue({
+            'Total Steps': resolvedSteps.length,
+            'Executed': run.executedSteps.length,
+            'Succeeded': run.successCount,
+            'Failed': run.failureCount
+        });
+
+        const resultPayload = {
+            success: run.failureCount === 0,
+            // The caller invoked `execute_workflow`; even though we route through
+            // the shared sequence executor, the machine-readable actionType must
+            // stay stable for clients that branch on it. `autoExecuted: true`
+            // distinguishes the run mode without changing the action's identity.
+            // (The standalone `execute_sequence` action keeps actionType
+            // 'execute_sequence' — see handleExecuteSequence.)
+            actionType: 'execute_workflow',
+            templateId: input.templateId,
+            templateName: template.name,
+            autoExecuted: true,
+            totalSteps: resolvedSteps.length,
+            executedSteps: run.executedSteps.length,
+            successCount: run.successCount,
+            failureCount: run.failureCount,
+            steps: run.executedSteps,
+            stepResults: Object.fromEntries(run.stepResults)
+        };
+
+        output += RichFormatter.embedJson(resultPayload, 'BATCH_MANAGE');
+
+        return { content: [{ type: 'text', text: output }] };
+    }
 
     let output = RichFormatter.header(`Workflow: ${template.name}`, '⚙️');
     output += `*${template.description}*\n\n`;
@@ -591,37 +717,57 @@ function resolveStepReferences(
     args: Record<string, unknown>,
     stepResults: Map<string, unknown>
 ): Record<string, unknown> {
-    const resolved: Record<string, unknown> = {};
+    return resolveValue(args, stepResults) as Record<string, unknown>;
+}
 
-    for (const [key, value] of Object.entries(args)) {
-        if (typeof value === 'string' && value.startsWith('{{') && value.endsWith('}}')) {
-            // Extract reference like "step1.characterId" or "step1.created[0].id"
-            const refPath = value.slice(2, -2).trim();
-            const dotIndex = refPath.indexOf('.');
-            if (dotIndex > 0) {
-                const stepId = refPath.slice(0, dotIndex);
-                const propertyPath = refPath.slice(dotIndex + 1);
+/**
+ * Resolve {{stepId.property}} references inside any value, preserving structure.
+ *
+ * Arrays must stay arrays — the previous implementation rebuilt every object
+ * (including arrays) via Object.entries into a plain object, turning
+ * `distributions: [ {...} ]` into `distributions: { "0": {...} }` and breaking
+ * downstream Zod array schemas. This walker keeps arrays as arrays and only
+ * substitutes string values that are pure `{{...}}` references.
+ */
+function resolveValue(value: unknown, stepResults: Map<string, unknown>): unknown {
+    if (typeof value === 'string' && value.startsWith('{{') && value.endsWith('}}')) {
+        // Extract reference like "step1.characterId" or "step1.created[0].id"
+        const refPath = value.slice(2, -2).trim();
+        const dotIndex = refPath.indexOf('.');
+        if (dotIndex > 0) {
+            const stepId = refPath.slice(0, dotIndex);
+            const propertyPath = refPath.slice(dotIndex + 1);
 
-                const stepResult = stepResults.get(stepId);
-                if (stepResult) {
-                    // Navigate the property path
-                    resolved[key] = getNestedValue(stepResult as Record<string, unknown>, propertyPath);
-                } else {
-                    // Reference not found, keep original
-                    resolved[key] = value;
-                }
-            } else {
-                resolved[key] = value;
+            const stepResult = stepResults.get(stepId);
+            if (stepResult) {
+                // Navigate the property path (supports array indexing like created[0].id).
+                // If the property does NOT exist on the prior step result,
+                // getNestedValue returns undefined — keep the original {{...}}
+                // literal instead of silently nulling the downstream arg, so an
+                // unresolvable reference stays explicit (and fails loudly at the
+                // consuming tool) rather than mutating args to undefined.
+                const resolved = getNestedValue(stepResult as Record<string, unknown>, propertyPath);
+                return resolved === undefined ? value : resolved;
             }
-        } else if (typeof value === 'object' && value !== null) {
-            // Recursively resolve nested objects
-            resolved[key] = resolveStepReferences(value as Record<string, unknown>, stepResults);
-        } else {
-            resolved[key] = value;
+            // Reference not found (no such step), keep original
+            return value;
         }
+        return value;
     }
 
-    return resolved;
+    if (Array.isArray(value)) {
+        return value.map(item => resolveValue(item, stepResults));
+    }
+
+    if (typeof value === 'object' && value !== null) {
+        const resolved: Record<string, unknown> = {};
+        for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+            resolved[key] = resolveValue(child, stepResults);
+        }
+        return resolved;
+    }
+
+    return value;
 }
 
 /**
@@ -640,39 +786,119 @@ function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
     return current;
 }
 
-async function handleExecuteSequence(input: BatchManageInput, ctx: SessionContext): Promise<McpResponse> {
-    if (!input.steps || input.steps.length === 0) {
-        return {
-            content: [{
-                type: 'text',
-                text: RichFormatter.error('execute_sequence requires steps array') +
-                    RichFormatter.embedJson({ error: true, message: 'steps required' }, 'BATCH_MANAGE')
-            }]
-        };
+/**
+ * Extract the JSON payload that RichFormatter.embedJson writes into tool output.
+ *
+ * Tools emit `<!-- <TAG>_JSON\n{...}\n<TAG>_JSON -->` (e.g. PARTY_MANAGE_JSON,
+ * CHARACTER_MANAGE_JSON, BATCH_MANAGE_JSON). This is the inverse of
+ * RichFormatter.embedJson and matches the canonical extraction regex already
+ * used elsewhere in the codebase (e.g. combat-map.ts), tying the opening and
+ * closing tags via a backreference so a partial/garbled envelope won't match.
+ *
+ * Returns the parsed object, or undefined when there is no parseable envelope.
+ */
+function extractEmbeddedJson(text: string): unknown {
+    const match = text.match(/<!-- (\w+_JSON)\n([\s\S]*?)\n\1 -->/);
+    if (!match) return undefined;
+    try {
+        return JSON.parse(match[2]);
+    } catch {
+        return undefined;
+    }
+}
+
+/** A single tool step to dispatch through the shared executor. */
+interface RunnableStep {
+    tool: string;
+    args: Record<string, unknown>;
+    id?: string;
+}
+
+/** Per-step outcome recorded by the shared executor. */
+interface ExecutedStepRecord {
+    stepIndex: number;
+    stepId: string;
+    tool: string;
+    success: boolean;
+    result?: unknown;
+    error?: string;
+}
+
+/** Aggregate outcome of running a list of steps. */
+interface RunStepsResult {
+    /** Human-readable progress log (per-step lines). */
+    output: string;
+    executedSteps: ExecutedStepRecord[];
+    stepResults: Map<string, unknown>;
+    successCount: number;
+    failureCount: number;
+}
+
+/**
+ * Shared step executor used by BOTH `execute_sequence` and the
+ * `execute_workflow` auto-execute path.
+ *
+ * Builds the consolidated tool registry, dispatches each step's tool handler,
+ * threads results between steps via {{stepId.property}} resolution, and honors
+ * `stopOnError`. This is the single source of truth for sequence execution —
+ * `handleExecuteSequence` and `handleExecuteWorkflow(autoExecute)` both call it
+ * so behavior cannot drift between the two entry points.
+ */
+async function runSteps(
+    steps: RunnableStep[],
+    ctx: SessionContext,
+    options: { stopOnError: boolean }
+): Promise<RunStepsResult> {
+    // Resolve the consolidated registry LAZILY (dynamic import at call time)
+    // rather than via a static top-level import. The registry barrel
+    // (consolidated/index.ts) imports BatchManageTool back from this module, so a
+    // static `import { buildConsolidatedRegistry }` here created a registry ↔
+    // batch-manage cycle: importing batch-manage in isolation triggered registry
+    // module eval against a partially-initialized ConsolidatedTools array, and
+    // tests had to import the barrel FIRST as a workaround. Deferring resolution
+    // to runtime breaks that eval-order dependency — by the time runSteps is
+    // actually called, every module has finished initializing.
+    // (CodeRabbit round-3 Major @815 — light decoupling, not the facade refactor.)
+    const { buildConsolidatedRegistry } = await import('../consolidated-registry.js');
+    const registry = buildConsolidatedRegistry();
+    const { stopOnError } = options;
+
+    // Re-apply the 10-step cap in the SHARED executor. execute_sequence enforced
+    // this via its Zod schema (steps.max(10)), but execute_workflow routes a
+    // TEMPLATE's steps straight through runSteps and bypasses that schema — so a
+    // template with >10 steps would otherwise run uncapped. Throw BEFORE any step
+    // executes; callers convert this into a BATCH_MANAGE error envelope (error:true)
+    // with NO partial run. (CodeRabbit round-4 @852 — Major.)
+    if (steps.length > 10) {
+        throw new Error('execute_sequence supports at most 10 steps');
     }
 
-    const registry = buildConsolidatedRegistry();
-    const stopOnError = input.stopOnError ?? true;
+    // Reject duplicate NORMALIZED step ids BEFORE executing anything. Each step's
+    // id is `step.id || stepN`, and that id keys stepResults — so a collision
+    // (two equal explicit ids, OR an explicit id equal to a generated `stepN`)
+    // would let `stepResults.set(stepId, ...)` silently overwrite an earlier
+    // step, making {{stepId.prop}} resolution ambiguous and dropping data from
+    // the final payload. Throw up front so the whole sequence is rejected with
+    // NO partial run (no side effects). Callers convert this into a BATCH_MANAGE
+    // error envelope. (CodeRabbit round-3 Major @822-870.)
+    const normalizedIds = steps.map((step, i) => step.id || `step${i + 1}`);
+    const duplicateIds = [
+        ...new Set(normalizedIds.filter((id, i) => normalizedIds.indexOf(id) !== i))
+    ];
+    if (duplicateIds.length > 0) {
+        throw new Error(`Duplicate step id(s): ${duplicateIds.join(', ')}`);
+    }
 
     const stepResults = new Map<string, unknown>();
-    const executedSteps: Array<{
-        stepIndex: number;
-        stepId: string;
-        tool: string;
-        success: boolean;
-        result?: unknown;
-        error?: string;
-    }> = [];
+    const executedSteps: ExecutedStepRecord[] = [];
+    let output = '';
 
-    let output = RichFormatter.header('Executing Sequence', '⚙️');
-    output += `*${input.steps.length} step(s) to execute*\n\n`;
-
-    for (let i = 0; i < input.steps.length; i++) {
-        const step = input.steps[i];
+    for (let i = 0; i < steps.length; i++) {
+        const step = steps[i];
         const stepId = step.id || `step${i + 1}`;
         const toolEntry = registry[step.tool];
 
-        output += `**Step ${i + 1}/${input.steps.length}**: \`${step.tool}\`\n`;
+        output += `**Step ${i + 1}/${steps.length}**: \`${step.tool}\`\n`;
 
         if (!toolEntry) {
             const error = `Unknown tool: ${step.tool}`;
@@ -700,29 +926,32 @@ async function handleExecuteSequence(input: BatchManageInput, ctx: SessionContex
             // Execute the tool
             const response = await toolEntry.handler(resolvedArgs, ctx);
 
-            // Parse the result from the response
+            // Parse the result from the response. Tools embed their structured
+            // payload via RichFormatter.embedJson as `<!-- <TAG>_JSON\n{...}\n<TAG>_JSON -->`
+            // (e.g. PARTY_MANAGE_JSON). Reuse the shared extractor so step results
+            // become the REAL parsed object — this is what lets resolveStepReferences /
+            // getNestedValue read fields like `created[0].id` for {{stepId.property}}
+            // cross-step passing. Falling back to { raw } only when there is no
+            // parseable envelope.
             let result: unknown = null;
-            if (response.content?.[0]?.text) {
-                // Try to extract JSON from embedded data
-                const text = response.content[0].text;
-                const jsonMatch = text.match(/<!--JSON:([^>]+)-->/);
-                if (jsonMatch) {
-                    try {
-                        result = JSON.parse(jsonMatch[1]);
-                    } catch {
-                        // Use raw text if JSON parsing fails
-                        result = { raw: text };
-                    }
-                } else {
-                    result = { raw: text };
-                }
+            const text = response.content?.[0]?.text;
+            if (text) {
+                const embedded = extractEmbeddedJson(text);
+                result = embedded !== undefined ? embedded : { raw: text };
             }
 
             // Store result for reference by later steps
             stepResults.set(stepId, result);
 
-            const success = !(result as Record<string, unknown> | null)?.error;
-            output += success ? `  ✅ Success\n` : `  ⚠️ Completed with warnings\n`;
+            // A step is FAILED if its parsed result reports failure via EITHER
+            // convention: `error` truthy OR `success === false`. Handlers in this
+            // file return `{ success: false, errors: [...] }` on partial failure
+            // without an `error` field, so checking only `error` (the old
+            // `!(result?.error)`) silently counted those as successful and never
+            // tripped stopOnError. (CodeRabbit Major @793-794.)
+            const resObj = result as Record<string, unknown> | null;
+            const success = !resObj?.error && resObj?.success !== false;
+            output += success ? `  ✅ Success\n` : `  ⚠️ Step reported failure\n`;
 
             executedSteps.push({
                 stepIndex: i,
@@ -731,6 +960,14 @@ async function handleExecuteSequence(input: BatchManageInput, ctx: SessionContex
                 success,
                 result
             });
+
+            // Honor stopOnError for steps that completed but reported failure
+            // (not just steps that threw). Without this, a `{ success: false }`
+            // step would let later steps run even though stopOnError is true.
+            if (!success && stopOnError) {
+                output += `\n*Execution stopped due to error (stopOnError=true)*\n`;
+                break;
+            }
 
         } catch (err: unknown) {
             const error = (err instanceof Error ? err.message : String(err)) || 'Unknown error';
@@ -754,23 +991,60 @@ async function handleExecuteSequence(input: BatchManageInput, ctx: SessionContex
     const successCount = executedSteps.filter(s => s.success).length;
     const failureCount = executedSteps.filter(s => !s.success).length;
 
+    return { output, executedSteps, stepResults, successCount, failureCount };
+}
+
+async function handleExecuteSequence(input: BatchManageInput, ctx: SessionContext): Promise<McpResponse> {
+    if (!input.steps || input.steps.length === 0) {
+        return {
+            content: [{
+                type: 'text',
+                text: RichFormatter.error('execute_sequence requires steps array') +
+                    RichFormatter.embedJson({ error: true, message: 'steps required' }, 'BATCH_MANAGE')
+            }]
+        };
+    }
+
+    const stopOnError = input.stopOnError ?? true;
+
+    let output = RichFormatter.header('Executing Sequence', '⚙️');
+    output += `*${input.steps.length} step(s) to execute*\n\n`;
+
+    // runSteps rejects duplicate normalized step ids up front (before any step
+    // runs). Surface that as a BATCH_MANAGE error envelope so callers branching
+    // on the embedded `error` flag see it, and nothing was partially executed.
+    let run: RunStepsResult;
+    try {
+        run = await runSteps(input.steps as RunnableStep[], ctx, { stopOnError });
+    } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+            content: [{
+                type: 'text',
+                text: RichFormatter.error(message) +
+                    RichFormatter.embedJson({ error: true, message, actionType: 'execute_sequence' }, 'BATCH_MANAGE')
+            }]
+        };
+    }
+    output += run.output;
+
     output += RichFormatter.section('Summary');
     output += RichFormatter.keyValue({
         'Total Steps': input.steps.length,
-        'Executed': executedSteps.length,
-        'Succeeded': successCount,
-        'Failed': failureCount
+        'Executed': run.executedSteps.length,
+        'Succeeded': run.successCount,
+        'Failed': run.failureCount
     });
 
     const resultPayload = {
-        success: failureCount === 0,
+        success: run.failureCount === 0,
         actionType: 'execute_sequence',
         totalSteps: input.steps.length,
-        executedSteps: executedSteps.length,
-        successCount,
-        failureCount,
-        steps: executedSteps,
-        stepResults: Object.fromEntries(stepResults)
+        executedSteps: run.executedSteps.length,
+        successCount: run.successCount,
+        failureCount: run.failureCount,
+        steps: run.executedSteps,
+        stepResults: Object.fromEntries(run.stepResults)
     };
 
     output += RichFormatter.embedJson(resultPayload, 'BATCH_MANAGE');
