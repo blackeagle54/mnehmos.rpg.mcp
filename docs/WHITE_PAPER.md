@@ -182,20 +182,24 @@ A dedicated subsystem for complex calculations, ensuring LLMs don't do math.
 
 ## 6. MCP Tool Reference
 
-The system exposes its capabilities via Model Context Protocol tools:
+The system exposes its capabilities via Model Context Protocol tools. As of v1.0 the
+surface consolidated into **36 action-routed tools** (`*_manage`, `combat_action`,
+`combat_map`, …); each conceptual capability below maps to a current tool + action
+(see the live `tools/list` for the authoritative set):
 
-| Category | Tool | Description |
-|----------|------|-------------|
-| **Observation** | `get_observation` | See local entities and terrain. |
-| | `query_entities` | Find specific entities by criteria. |
-| **Action** | `propose_action` | Move, attack, interact (generic intent). |
-| **World** | `create_world` | Generate a new world seed. |
-| | `world_step` | Advance time/physics. |
-| **Math** | `dice_roll` | `2d6+3` with advantage. |
-| | `probability_calculate` | Chance of success analysis. |
-| | `physics_projectile` | Trajectory calculation. |
-| **Inventory** | `equip_item` | Wear armor/weapons. |
-| | `transfer_item` | Move items between entities. |
+| Category | Tool (action) | Description |
+|----------|---------------|-------------|
+| **Observation** | `spatial_manage` (`look`) | See local entities and terrain. |
+| | `character_manage` / `npc_manage` (`list` / `get`) | Find specific entities by criteria. |
+| **Action** | action-routed tools (`combat_action`, `spatial_manage`/`move`, `travel_manage`, …) | Move, attack, interact (generic intent). |
+| **Combat** | `combat_manage` (`create` / `end`), `combat_map` (`render` / `aoe` / `place_prop`) | Run encounters; render the battlemap + areas of effect. |
+| **World** | `world_manage` (`generate`) | Generate a new world seed. |
+| | `strategy_manage` (`resolve_turn`) | Advance the nation-sim turn. |
+| **Math** | `math_manage` (`roll`) | `2d6+3` with advantage. |
+| | `math_manage` (`probability`) | Chance of success analysis. |
+| | `math_manage` (`projectile`) | Trajectory calculation. |
+| **Inventory** | `inventory_manage` (`equip`) | Wear armor/weapons. |
+| | `inventory_manage` (`transfer`) | Move items between entities. |
 
 ---
 

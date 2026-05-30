@@ -4,11 +4,11 @@
 
 Follow this sequence when creating 3D combat encounters:
 
-1. **Generate Terrain** → `generate_terrain_patch` with biome/density
-2. **Add Details** → `place_prop` for POIs, buildings, structures
+1. **Generate Terrain** → `combat_map` (action `generate_patch`) with biome/density
+2. **Add Details** → `combat_map` (action `place_prop`) for POIs, buildings, structures
 3. **Place Party** → Party members positioned safely
 4. **Place Enemies** → Enemies positioned tactically
-5. **Start Combat** → `create_encounter` with all positions
+5. **Start Combat** → `combat_manage` (action `create`) with all positions
 
 ---
 
