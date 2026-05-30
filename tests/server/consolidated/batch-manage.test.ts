@@ -403,8 +403,10 @@ describe('batch_manage consolidated tool', () => {
             }, ctx);
 
             const data = parseResult(result);
-            // Routed through the shared sequence engine, NOT prepare-only.
-            expect(data.actionType).toBe('execute_sequence');
+            // Routed through the shared sequence engine, NOT prepare-only. The
+            // caller invoked execute_workflow, so the machine-readable actionType
+            // stays 'execute_workflow' (autoExecuted distinguishes the run mode).
+            expect(data.actionType).toBe('execute_workflow');
             expect(data.autoExecuted).toBe(true);
             // Real per-step execution records (not just resolved arg specs).
             expect(Array.isArray(data.steps)).toBe(true);
@@ -485,7 +487,8 @@ describe('batch_manage consolidated tool', () => {
             }, ctx);
 
             const data = parseResult(result);
-            expect(data.actionType).toBe('execute_sequence');
+            // execute_workflow auto-execute path → actionType stays 'execute_workflow'.
+            expect(data.actionType).toBe('execute_workflow');
             expect(data.success).toBe(false);
             expect(data.failureCount).toBeGreaterThan(0);
             // Only the failing step ran; the party step was skipped.
@@ -513,7 +516,7 @@ describe('batch_manage consolidated tool', () => {
             }, ctx);
 
             const data = parseResult(result);
-            expect(data.actionType).toBe('execute_sequence');
+            expect(data.actionType).toBe('execute_workflow');
 
             // The party_manage step received the substituted {{partyName}} value:
             // assert the dispatched tool actually created a party with that exact name.
@@ -550,7 +553,7 @@ describe('batch_manage consolidated tool', () => {
                 }, ctx);
 
                 const data = parseResult(result);
-                expect(data.actionType).toBe('execute_sequence');
+                expect(data.actionType).toBe('execute_workflow');
                 expect(data.executedSteps).toBe(2);
                 expect(data.failureCount).toBe(0);
                 // Step 2's get returned the SAME party created in step 1.
@@ -558,6 +561,60 @@ describe('batch_manage consolidated tool', () => {
                 expect(data.stepResults.step2.name).toBe('InterStepParty');
             } finally {
                 delete WORKFLOW_TEMPLATES[INTERSTEP_ID];
+            }
+        });
+
+        // CodeRabbit round-2 outside-diff @75-80 (Major): template step prep must
+        //   (a) PRESERVE a template-authored step.id so {{thatId.prop}} inter-step
+        //       references resolve through the workflow path, and
+        //   (b) substitute caller {{param}} placeholders nested inside objects
+        //       (and arrays), not just top-level string args.
+        // This template authors an explicit id ("mkParty") on step 1 and nests the
+        // {{partyName}} caller param one level deep inside an object arg; step 2
+        // reads the created party back via {{mkParty.party.id}}. If ids were dropped
+        // or nested substitution were skipped, step 2 would fail to find the party.
+        it('preserves template step.id AND resolves nested {{param}} placeholders via execute_workflow', async () => {
+            const NESTED_ID = '__test_nested_param_workflow__';
+            WORKFLOW_TEMPLATES[NESTED_ID] = {
+                name: 'Nested Param Workflow',
+                description: 'step mkParty creates a party with a nested {{partyName}} arg; step 2 reads it via {{mkParty.party.id}}',
+                steps: [
+                    {
+                        tool: 'party_manage',
+                        // {{partyName}} is nested inside a `details` object to prove
+                        // deep substitution (party_manage create ignores extra
+                        // fields, so this is safe) AND top-level name still resolves.
+                        args: { action: 'create', name: '{{partyName}}', details: { label: '{{partyName}}' } },
+                        id: 'mkParty'
+                    },
+                    { tool: 'party_manage', args: { action: 'get', partyId: '{{mkParty.party.id}}' } }
+                ],
+                requiredParams: ['partyName']
+            } as (typeof WORKFLOW_TEMPLATES)[string];
+            try {
+                const result = await handleBatchManage({
+                    action: 'execute_workflow',
+                    templateId: NESTED_ID,
+                    params: { partyName: 'NestedAuthoredParty' },
+                    autoExecute: true,
+                    stopOnError: true
+                }, ctx);
+
+                const data = parseResult(result);
+                expect(data.failureCount).toBe(0);
+                expect(data.executedSteps).toBe(2);
+                // The authored id "mkParty" was preserved, so {{mkParty.party.id}}
+                // resolved and step 2 fetched the SAME party.
+                expect(data.stepResults.mkParty).toBeDefined();
+                expect(data.stepResults.step2.id).toBe(data.stepResults.mkParty.party.id);
+                // The nested {{partyName}} was substituted with the caller's value.
+                expect(data.stepResults.mkParty.party.name).toBe('NestedAuthoredParty');
+
+                const db = getDb(':memory:');
+                const partyRepo = new PartyRepository(db);
+                expect(partyRepo.findAll().map(p => p.name)).toContain('NestedAuthoredParty');
+            } finally {
+                delete WORKFLOW_TEMPLATES[NESTED_ID];
             }
         });
     });
@@ -707,6 +764,37 @@ describe('batch_manage consolidated tool', () => {
             expect(data.steps[0].success).toBe(true);
         });
 
+        // CodeRabbit round-2 @681 (Minor): an UNRESOLVABLE {{stepId.prop}} ref —
+        // the step exists but the property path does not — must be preserved as
+        // the literal {{...}} string, NOT silently replaced with `undefined`.
+        // Step A succeeds but has no `.nonexistent` field; step B's `get`
+        // therefore receives the literal "{{A.nonexistent}}" string (which is a
+        // valid string that simply maps to no party) instead of partyId=undefined
+        // (which would be a DIFFERENT failure — a Zod "expected string" error).
+        // We assert the literal placeholder reaches the tool by checking the
+        // resulting "Party not found" error echoes the unresolved placeholder.
+        it('unresolvable {{stepId.prop}} ref is preserved literally, not nulled to undefined', async () => {
+            const result = await handleBatchManage({
+                action: 'execute_sequence',
+                stopOnError: false,
+                steps: [
+                    { tool: 'party_manage', args: { action: 'create', name: 'HasNoSuchProp' }, id: 'A' },
+                    { tool: 'party_manage', args: { action: 'get', partyId: '{{A.nonexistent}}' }, id: 'B' }
+                ]
+            }, ctx);
+
+            const data = parseResult(result);
+            const stepB = data.steps.find((s: { stepId: string }) => s.stepId === 'B');
+            expect(stepB).toBeDefined();
+            expect(stepB.success).toBe(false);
+            // The literal placeholder string was passed through as partyId, so the
+            // repo lookup failed with "Party not found: {{A.nonexistent}}". With the
+            // bug (partyId resolved to undefined), the error is instead a Zod
+            // "Required" validation failure that does NOT echo the placeholder.
+            const stepBText = JSON.stringify(stepB);
+            expect(stepBText).toContain('{{A.nonexistent}}');
+        });
+
         it('autoExecute workflow with a {success:false} step halts under stopOnError', async () => {
             const FAIL_SF_ID = '__test_success_false_workflow__';
             WORKFLOW_TEMPLATES[FAIL_SF_ID] = {
@@ -733,7 +821,8 @@ describe('batch_manage consolidated tool', () => {
                 }, ctx);
 
                 const data = parseResult(result);
-                expect(data.actionType).toBe('execute_sequence');
+                // execute_workflow auto-execute path → actionType stays 'execute_workflow'.
+                expect(data.actionType).toBe('execute_workflow');
                 expect(data.success).toBe(false);
                 expect(data.executedSteps).toBe(1);
                 expect(data.failureCount).toBeGreaterThan(0);

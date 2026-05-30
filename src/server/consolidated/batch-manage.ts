@@ -75,7 +75,10 @@ function ensureDb() {
 export const WORKFLOW_TEMPLATES: Record<string, {
     name: string;
     description: string;
-    steps: Array<{ tool: string; args: Record<string, any> }>;
+    // `id` is optional and, when present, is PRESERVED through to runSteps so
+    // inter-step {{thatId.prop}} references can target a template-authored id
+    // (not just the positional `step{n}` default).
+    steps: Array<{ tool: string; args: Record<string, any>; id?: string }>;
     requiredParams: string[];
 }> = {
     'start_campaign': {
@@ -474,24 +477,41 @@ async function handleExecuteWorkflow(input: BatchManageInput, _ctx: SessionConte
     // during the run. Previously this pass clobbered EVERY `{{...}}` string,
     // turning inter-step references into `undefined` before the executor ever
     // saw them — so cross-step passing never worked through the workflow path.
-    const resolvedSteps = template.steps.map(step => {
-        const resolvedArgs: Record<string, any> = {};
-        for (const [key, value] of Object.entries(step.args)) {
-            if (
-                typeof value === 'string' &&
-                value.startsWith('{{') &&
-                value.endsWith('}}') &&
-                Object.prototype.hasOwnProperty.call(params, value.slice(2, -2))
-            ) {
-                resolvedArgs[key] = params[value.slice(2, -2)];
-            } else {
-                // Literal value OR an inter-step {{stepId.prop}} reference: pass
-                // through untouched for the executor to resolve.
-                resolvedArgs[key] = value;
-            }
+    // Deeply substitute caller {{param}} placeholders inside args, walking
+    // nested objects AND arrays (the previous pass only handled top-level string
+    // args, so a {{partyName}} nested one level deep never resolved). A pure
+    // `{{name}}` string is replaced only when `name` is an ACTUAL caller param;
+    // anything else (notably inter-step {{stepId.prop}} references, which are NOT
+    // caller params) is left intact for the shared executor to resolve at run time.
+    const resolveTemplateValue = (value: unknown): unknown => {
+        if (
+            typeof value === 'string' &&
+            value.startsWith('{{') &&
+            value.endsWith('}}')
+        ) {
+            const key = value.slice(2, -2);
+            return Object.prototype.hasOwnProperty.call(params, key) ? params[key] : value;
         }
-        return { tool: step.tool, args: resolvedArgs };
-    });
+        if (Array.isArray(value)) {
+            return value.map(resolveTemplateValue);
+        }
+        if (value && typeof value === 'object') {
+            return Object.fromEntries(
+                Object.entries(value as Record<string, unknown>).map(
+                    ([k, v]) => [k, resolveTemplateValue(v)]
+                )
+            );
+        }
+        return value;
+    };
+
+    // Preserve any template-authored step `id` so inter-step {{id.prop}}
+    // references can target it; runSteps falls back to `step{n}` when absent.
+    const resolvedSteps = template.steps.map(step => ({
+        tool: step.tool,
+        id: step.id,
+        args: resolveTemplateValue(step.args) as Record<string, unknown>
+    }));
 
     // Opt-in auto-execute: route the resolved steps through the SAME engine
     // execute_sequence uses. Default (autoExecute=false) preserves the original
@@ -516,7 +536,13 @@ async function handleExecuteWorkflow(input: BatchManageInput, _ctx: SessionConte
 
         const resultPayload = {
             success: run.failureCount === 0,
-            actionType: 'execute_sequence',
+            // The caller invoked `execute_workflow`; even though we route through
+            // the shared sequence executor, the machine-readable actionType must
+            // stay stable for clients that branch on it. `autoExecuted: true`
+            // distinguishes the run mode without changing the action's identity.
+            // (The standalone `execute_sequence` action keeps actionType
+            // 'execute_sequence' — see handleExecuteSequence.)
+            actionType: 'execute_workflow',
             templateId: input.templateId,
             templateName: template.name,
             autoExecuted: true,
@@ -677,10 +703,16 @@ function resolveValue(value: unknown, stepResults: Map<string, unknown>): unknow
 
             const stepResult = stepResults.get(stepId);
             if (stepResult) {
-                // Navigate the property path (supports array indexing like created[0].id)
-                return getNestedValue(stepResult as Record<string, unknown>, propertyPath);
+                // Navigate the property path (supports array indexing like created[0].id).
+                // If the property does NOT exist on the prior step result,
+                // getNestedValue returns undefined — keep the original {{...}}
+                // literal instead of silently nulling the downstream arg, so an
+                // unresolvable reference stays explicit (and fails loudly at the
+                // consuming tool) rather than mutating args to undefined.
+                const resolved = getNestedValue(stepResult as Record<string, unknown>, propertyPath);
+                return resolved === undefined ? value : resolved;
             }
-            // Reference not found, keep original
+            // Reference not found (no such step), keep original
             return value;
         }
         return value;
