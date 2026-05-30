@@ -89,10 +89,34 @@ export const WORKFLOW_TEMPLATES: Record<string, {
         // was silently masked while the executor mis-parsed every result as
         // { raw: text } (fake success). With the result parser fixed, the step
         // is supplied valid defaults so the workflow runs end to end.
+        //
+        // The starting location uses spawn_manage `spawn_location` (NOT
+        // `spawn_preset_location`). `spawn_preset_location` requires worldId/x/y
+        // that a static template cannot supply, so under autoExecute that step
+        // errored at runtime ("worldId, x, y required") — start_campaign never
+        // actually ran end to end. `spawn_location` needs no coordinates (it
+        // defaults worldId to 'local') and creates the tavern + its NPCs/rooms in
+        // one call, mirroring the proven lotr_campaign pattern. Intent preserved:
+        // a starting tavern for the new party.
         steps: [
             { tool: 'world_manage', args: { action: 'generate', seed: '{{worldName}}', width: 50, height: 50 } },
             { tool: 'party_manage', args: { action: 'create', name: '{{partyName}}' } },
-            { tool: 'spawn_manage', args: { action: 'spawn_preset_location', preset: 'generic_tavern' } }
+            {
+                tool: 'spawn_manage',
+                args: {
+                    action: 'spawn_location',
+                    name: 'The Rusty Tankard',
+                    locationType: 'tavern',
+                    npcs: [
+                        { name: 'Barkeep', role: 'Innkeeper', behavior: 'Welcoming, knows the local rumors' },
+                        { name: 'Serving Wench', role: 'Server', behavior: 'Quick with a tankard and a quip' }
+                    ],
+                    rooms: [
+                        { name: 'Common Room', description: 'A busy tavern common room, warm with firelight and chatter.' },
+                        { name: 'Upstairs Rooms', description: 'A short hall of rented guest rooms above the common room.' }
+                    ]
+                }
+            }
         ],
         requiredParams: ['worldName', 'partyName']
     },
