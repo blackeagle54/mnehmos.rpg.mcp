@@ -1379,6 +1379,36 @@ describe('batch_manage consolidated tool', () => {
             expect(npcCount).toBeGreaterThan(0);
         });
 
+        it('start_campaign autoExecute creates world + party + starting location (all 3 steps succeed)', async () => {
+            const result = await handleBatchManage({
+                action: 'execute_workflow',
+                templateId: 'start_campaign',
+                params: { worldName: 'Aldoria', partyName: 'The Brave Few' },
+                autoExecute: true,
+                stopOnError: true
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.actionType).toBe('execute_workflow');
+            expect(data.autoExecuted).toBe(true);
+            // All three steps (world generate, party create, starting location) must
+            // run AND succeed end to end — the previous 3rd step (spawn_preset_location)
+            // errored at runtime for want of worldId/x/y, leaving failureCount > 0.
+            expect(data.failureCount).toBe(0);
+            expect(data.executedSteps).toBe(3);
+            expect(data.steps.every((s: { success: boolean }) => s.success)).toBe(true);
+
+            // Side effects: the world, the party, and the starting location all exist.
+            const db = getDb(':memory:');
+            const partyRepo = new PartyRepository(db);
+            const partyNames = partyRepo.findAll().map(p => p.name);
+            expect(partyNames).toContain('The Brave Few');
+
+            // Step 1 generated a world (real worldId), step 3 created a location.
+            expect(data.stepResults.step1.worldId).toBeTruthy();
+            expect(data.stepResults.step3.locationId).toBeTruthy();
+        });
+
         it('lotr_campaign autoExecute creates world + party + starting location', async () => {
             const result = await handleBatchManage({
                 action: 'execute_workflow',
