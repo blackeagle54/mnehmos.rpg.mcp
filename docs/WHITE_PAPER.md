@@ -184,7 +184,7 @@ A dedicated subsystem for complex calculations, ensuring LLMs don't do math.
 
 The system exposes its capabilities via Model Context Protocol tools. As of v1.0 the
 surface consolidated into **36 action-routed tools** (`*_manage`, `combat_action`,
-`world_map`, …); each conceptual capability below maps to a current tool + action
+`combat_map`, …); each conceptual capability below maps to a current tool + action
 (see the live `tools/list` for the authoritative set):
 
 | Category | Tool (action) | Description |
