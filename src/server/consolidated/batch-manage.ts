@@ -14,7 +14,6 @@ import { CharacterRepository } from '../../storage/repos/character.repo.js';
 import { InventoryRepository } from '../../storage/repos/inventory.repo.js';
 import { ItemRepository } from '../../storage/repos/item.repo.js';
 import { SessionContext } from '../types.js';
-import { buildConsolidatedRegistry } from '../consolidated-registry.js';
 import { ToolContract } from '../tool-metadata.js';
 
 export interface McpResponse {
@@ -452,9 +451,14 @@ async function handleExecuteWorkflow(input: BatchManageInput, _ctx: SessionConte
         };
     }
 
-    // Check required params
+    // Check required params. Test for key PRESENCE, not truthiness: `!params[p]`
+    // would reject legitimately-supplied falsy values (0, false, ''), so a
+    // template whose required param is meant to be `0`/`false`/`''` could never
+    // run. A param counts as supplied when the key exists and is not `undefined`.
     const params = input.params || {};
-    const missingParams = template.requiredParams.filter(p => !params[p]);
+    const missingParams = template.requiredParams.filter(
+        p => !Object.prototype.hasOwnProperty.call(params, p) || params[p] === undefined
+    );
     if (missingParams.length > 0) {
         return {
             content: [{
@@ -523,7 +527,29 @@ async function handleExecuteWorkflow(input: BatchManageInput, _ctx: SessionConte
         output += `*${template.description}*\n\n`;
         output += `*Auto-executing ${resolvedSteps.length} step(s)...*\n\n`;
 
-        const run = await runSteps(resolvedSteps as RunnableStep[], _ctx, { stopOnError });
+        // runSteps rejects duplicate normalized step ids up front (before any
+        // step runs). Surface that as a BATCH_MANAGE error envelope; nothing was
+        // partially executed. actionType stays 'execute_workflow' (the caller's
+        // action identity), consistent with the success path below.
+        let run: RunStepsResult;
+        try {
+            run = await runSteps(resolvedSteps as RunnableStep[], _ctx, { stopOnError });
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            return {
+                content: [{
+                    type: 'text',
+                    text: RichFormatter.error(message) +
+                        RichFormatter.embedJson({
+                            error: true,
+                            message,
+                            actionType: 'execute_workflow',
+                            templateId: input.templateId,
+                            templateName: template.name
+                        }, 'BATCH_MANAGE')
+                }]
+            };
+        }
         output += run.output;
 
         output += RichFormatter.section('Summary');
@@ -812,8 +838,35 @@ async function runSteps(
     ctx: SessionContext,
     options: { stopOnError: boolean }
 ): Promise<RunStepsResult> {
+    // Resolve the consolidated registry LAZILY (dynamic import at call time)
+    // rather than via a static top-level import. The registry barrel
+    // (consolidated/index.ts) imports BatchManageTool back from this module, so a
+    // static `import { buildConsolidatedRegistry }` here created a registry ↔
+    // batch-manage cycle: importing batch-manage in isolation triggered registry
+    // module eval against a partially-initialized ConsolidatedTools array, and
+    // tests had to import the barrel FIRST as a workaround. Deferring resolution
+    // to runtime breaks that eval-order dependency — by the time runSteps is
+    // actually called, every module has finished initializing.
+    // (CodeRabbit round-3 Major @815 — light decoupling, not the facade refactor.)
+    const { buildConsolidatedRegistry } = await import('../consolidated-registry.js');
     const registry = buildConsolidatedRegistry();
     const { stopOnError } = options;
+
+    // Reject duplicate NORMALIZED step ids BEFORE executing anything. Each step's
+    // id is `step.id || stepN`, and that id keys stepResults — so a collision
+    // (two equal explicit ids, OR an explicit id equal to a generated `stepN`)
+    // would let `stepResults.set(stepId, ...)` silently overwrite an earlier
+    // step, making {{stepId.prop}} resolution ambiguous and dropping data from
+    // the final payload. Throw up front so the whole sequence is rejected with
+    // NO partial run (no side effects). Callers convert this into a BATCH_MANAGE
+    // error envelope. (CodeRabbit round-3 Major @822-870.)
+    const normalizedIds = steps.map((step, i) => step.id || `step${i + 1}`);
+    const duplicateIds = [
+        ...new Set(normalizedIds.filter((id, i) => normalizedIds.indexOf(id) !== i))
+    ];
+    if (duplicateIds.length > 0) {
+        throw new Error(`Duplicate step id(s): ${duplicateIds.join(', ')}`);
+    }
 
     const stepResults = new Map<string, unknown>();
     const executedSteps: ExecutedStepRecord[] = [];
@@ -936,7 +989,22 @@ async function handleExecuteSequence(input: BatchManageInput, ctx: SessionContex
     let output = RichFormatter.header('Executing Sequence', '⚙️');
     output += `*${input.steps.length} step(s) to execute*\n\n`;
 
-    const run = await runSteps(input.steps as RunnableStep[], ctx, { stopOnError });
+    // runSteps rejects duplicate normalized step ids up front (before any step
+    // runs). Surface that as a BATCH_MANAGE error envelope so callers branching
+    // on the embedded `error` flag see it, and nothing was partially executed.
+    let run: RunStepsResult;
+    try {
+        run = await runSteps(input.steps as RunnableStep[], ctx, { stopOnError });
+    } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+            content: [{
+                type: 'text',
+                text: RichFormatter.error(message) +
+                    RichFormatter.embedJson({ error: true, message, actionType: 'execute_sequence' }, 'BATCH_MANAGE')
+            }]
+        };
+    }
     output += run.output;
 
     output += RichFormatter.section('Summary');

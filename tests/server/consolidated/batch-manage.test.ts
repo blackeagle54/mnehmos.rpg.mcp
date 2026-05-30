@@ -3,18 +3,15 @@
  * Validates all 6 actions: create_characters, create_npcs, distribute_items, execute_workflow, list_templates, get_template
  */
 
-// Import the consolidated barrel FIRST so the full ConsolidatedTools array is
-// initialized before buildConsolidatedRegistry() runs (the execute_sequence /
-// auto-execute paths build the registry; importing batch-manage in isolation
-// would otherwise hit a circular-load partial array).
-import { ConsolidatedTools } from '../../../src/server/consolidated/index.js';
+// NOTE: batch-manage now resolves the consolidated registry LAZILY (dynamic
+// import inside runSteps), so importing it in isolation no longer triggers a
+// partially-initialized ConsolidatedTools array. The previous barrel-import-FIRST
+// workaround is therefore no longer required.
 import { handleBatchManage, BatchManageTool, WORKFLOW_TEMPLATES } from '../../../src/server/consolidated/batch-manage.js';
 import { getDb, closeDb } from '../../../src/storage/index.js';
 import { CharacterRepository } from '../../../src/storage/repos/character.repo.js';
 import { PartyRepository } from '../../../src/storage/repos/party.repo.js';
 import { randomUUID } from 'crypto';
-
-void ConsolidatedTools;
 
 process.env.NODE_ENV = 'test';
 
@@ -372,6 +369,41 @@ describe('batch_manage consolidated tool', () => {
 
             const data = parseResult(result);
             expect(data.error).toBe(true);
+        });
+
+        // CodeRabbit round-3 @455-458 (Minor): the required-param check used
+        // `!params[p]`, which treats valid falsy values (0, false, '') as
+        // MISSING. A template whose required param is legitimately supplied as
+        // `0`/`false`/`''` could then never run. The fix tests key PRESENCE, not
+        // truthiness. Use a transient template so we don't depend on a built-in
+        // template having a falsy-able param.
+        it('accepts falsy-but-present required params (0/false/empty string) — key presence, not truthiness', async () => {
+            const FALSY_PARAMS_ID = '__test_falsy_required_params__';
+            WORKFLOW_TEMPLATES[FALSY_PARAMS_ID] = {
+                name: 'Falsy Params Workflow',
+                description: 'required params supplied as falsy values must be accepted',
+                steps: [
+                    { tool: 'party_manage', args: { action: 'create', name: 'FalsyParamsParty' } }
+                ],
+                requiredParams: ['count', 'enabled', 'label']
+            };
+            try {
+                const result = await handleBatchManage({
+                    action: 'execute_workflow',
+                    templateId: FALSY_PARAMS_ID,
+                    params: { count: 0, enabled: false, label: '' }
+                }, ctx);
+
+                const data = parseResult(result);
+                // With the truthiness bug, all three params register as missing and
+                // the call short-circuits with error:true + missingParams. With the
+                // presence-based fix, the workflow prepares normally.
+                expect(data.error).toBeUndefined();
+                expect(data.missingParams).toBeUndefined();
+                expect(data.actionType).toBe('execute_workflow');
+            } finally {
+                delete WORKFLOW_TEMPLATES[FALSY_PARAMS_ID];
+            }
         });
 
         it('should accept "workflow" alias', async () => {
@@ -793,6 +825,64 @@ describe('batch_manage consolidated tool', () => {
             // "Required" validation failure that does NOT echo the placeholder.
             const stepBText = JSON.stringify(stepB);
             expect(stepBText).toContain('{{A.nonexistent}}');
+        });
+
+        // CodeRabbit round-3 @822-870 (Major): the normalized stepId
+        // (`step.id || stepN`) can COLLIDE — two equal explicit ids, or an
+        // explicit id equal to a generated `stepN`. stepResults.set(stepId,...)
+        // then silently overwrites the earlier step, making {{stepId.prop}}
+        // ambiguous and dropping data from the payload. The fix rejects
+        // duplicates BEFORE any step executes (no partial run, no DB writes).
+        it('rejects two steps sharing an explicit id (duplicate "mk") before execution — no partial run', async () => {
+            const result = await handleBatchManage({
+                action: 'execute_sequence',
+                steps: [
+                    { tool: 'party_manage', args: { action: 'create', name: 'DupA' }, id: 'mk' },
+                    { tool: 'party_manage', args: { action: 'create', name: 'DupB' }, id: 'mk' }
+                ]
+            }, ctx);
+
+            const data = parseResult(result);
+            // The whole call is rejected up front: error envelope, no executed steps.
+            expect(data.error).toBe(true);
+            const text = result.content[0].text;
+            expect(text).toContain('Duplicate step id');
+            expect(text).toContain('mk');
+
+            // Neither party was created — execution never began.
+            const db = getDb(':memory:');
+            const partyRepo = new PartyRepository(db);
+            const names = partyRepo.findAll().map(p => p.name);
+            expect(names).not.toContain('DupA');
+            expect(names).not.toContain('DupB');
+        });
+
+        it('rejects an explicit id colliding with a generated stepN id before execution — no partial run', async () => {
+            // First step has no id → normalizes to `step1`. Second step has no id
+            // → normalizes to `step2`. Third step explicitly sets id `step2`,
+            // colliding with the generated id of the second step.
+            const result = await handleBatchManage({
+                action: 'execute_sequence',
+                steps: [
+                    { tool: 'party_manage', args: { action: 'create', name: 'GenA' } },
+                    { tool: 'party_manage', args: { action: 'create', name: 'GenB' } },
+                    { tool: 'party_manage', args: { action: 'create', name: 'GenC' }, id: 'step2' }
+                ]
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.error).toBe(true);
+            const text = result.content[0].text;
+            expect(text).toContain('Duplicate step id');
+            expect(text).toContain('step2');
+
+            // No step ran → none of the parties exist.
+            const db = getDb(':memory:');
+            const partyRepo = new PartyRepository(db);
+            const names = partyRepo.findAll().map(p => p.name);
+            expect(names).not.toContain('GenA');
+            expect(names).not.toContain('GenB');
+            expect(names).not.toContain('GenC');
         });
 
         it('autoExecute workflow with a {success:false} step halts under stopOnError', async () => {
