@@ -112,6 +112,127 @@ export const WORKFLOW_TEMPLATES: Record<string, {
             { tool: 'session_manage', args: { action: 'get_context', partyId: '{{partyId}}' } }
         ],
         requiredParams: ['partyId']
+    },
+
+    // ─── Phase 6 template library ────────────────────────────────────────────
+    // Every step below is GROUNDED in a real consolidated tool + a verified
+    // action with well-formed args (see PR notes). The template-integrity
+    // guardrail test asserts each step.tool resolves in the consolidated
+    // registry, so a dangling reference would fail CI.
+
+    // Settlement generator: ONE spawn_manage `spawn_location` step creates the
+    // location AND populates its NPCs + rooms in a single call (verified: that
+    // handler creates npc characters with characterType 'npc' and room nodes,
+    // returning { success:true, locationId, npcs, rooms }). The settlement's
+    // name/type come from the caller; the NPC roster and rooms are sensible
+    // defaults for a small settlement.
+    'generate_settlement': {
+        name: 'Generate Settlement',
+        description: 'Create a populated settlement (location, key NPCs, and rooms) in one step',
+        steps: [
+            {
+                tool: 'spawn_manage',
+                args: {
+                    action: 'spawn_location',
+                    name: '{{settlementName}}',
+                    locationType: '{{settlementType}}',
+                    npcs: [
+                        { name: 'Mayor', role: 'Settlement Leader', behavior: 'Cautiously welcoming to travelers' },
+                        { name: 'Innkeeper', role: 'Innkeeper', behavior: 'Friendly and full of local gossip' },
+                        { name: 'Blacksmith', role: 'Blacksmith', race: 'Dwarf', behavior: 'Gruff but fair' },
+                        { name: 'Town Guard', role: 'Guard', behavior: 'Watchful of strangers' },
+                        { name: 'Merchant', role: 'General Goods Merchant', behavior: 'Always angling for a sale' }
+                    ],
+                    rooms: [
+                        { name: 'Town Square', description: 'The bustling heart of the settlement, ringed by stalls.' },
+                        { name: 'The Inn', description: 'A warm common room with a crackling hearth and worn tables.' },
+                        { name: 'Market Row', description: 'A street of shopfronts selling everyday goods.' }
+                    ]
+                }
+            }
+        ],
+        requiredParams: ['settlementName', 'settlementType']
+    },
+
+    // Tavern populator: ONE BATCHED `create_npcs` step (a nested batch_manage
+    // call) creates ten patrons in a single dispatch — deliberately NOT ten
+    // separate steps, which would consume the hard 10-step executor cap. The
+    // tavern name flows into locationName so the NPC metadata records where
+    // they belong (verified: handleCreateNpcs persists each npc and stamps
+    // metadata.location from locationName).
+    'populate_tavern': {
+        name: 'Populate Tavern',
+        description: 'Create a full cast of ~10 tavern NPCs in a single batched step',
+        steps: [
+            {
+                tool: 'batch_manage',
+                args: {
+                    action: 'create_npcs',
+                    locationName: '{{tavernName}}',
+                    npcs: [
+                        { name: 'Barliman', role: 'Innkeeper', behavior: 'Forgetful but kind-hearted' },
+                        { name: 'Nob', role: 'Hobbit Server', race: 'Halfling', behavior: 'Quick on his feet' },
+                        { name: 'Bob', role: 'Stable Hand', behavior: 'Knows every horse by name' },
+                        { name: 'Old Tom', role: 'Regular Patron', behavior: 'Drinks slowly, listens closely' },
+                        { name: 'Mira', role: 'Bard', behavior: 'Plays for coin and applause' },
+                        { name: 'Garrick', role: 'Mercenary', behavior: 'Looking for the next contract' },
+                        { name: 'Hilda', role: 'Cook', race: 'Dwarf', behavior: 'Rules the kitchen with an iron ladle' },
+                        { name: 'Pip', role: 'Pickpocket', race: 'Halfling', behavior: 'Friendly, with light fingers' },
+                        { name: 'Sera', role: 'Traveling Merchant', behavior: 'Has wares from distant lands' },
+                        { name: 'Dunric', role: 'Drunk', behavior: 'Slurs prophecies no one believes' }
+                    ]
+                }
+            }
+        ],
+        requiredParams: ['tavernName']
+    },
+
+    // Themed campaign: a Middle-earth-flavored variant of start_campaign,
+    // grounded in the SAME tools start_campaign uses (world_manage generate +
+    // party_manage create) for the world and fellowship. For the starting
+    // location it uses spawn_manage `spawn_location` (verified working with a
+    // populated NPC/room payload) rather than `spawn_preset_location`, which
+    // requires worldId/x/y the template cannot supply — so this campaign runs
+    // end to end. worldName seeds world generation; fellowshipName names the party.
+    'lotr_campaign': {
+        name: 'Middle-earth Campaign',
+        description: 'Start a Tolkien-flavored campaign: generate a world, form a fellowship, and open in Bree',
+        steps: [
+            { tool: 'world_manage', args: { action: 'generate', seed: '{{worldName}}', width: 60, height: 60 } },
+            { tool: 'party_manage', args: { action: 'create', name: '{{fellowshipName}}' } },
+            {
+                tool: 'spawn_manage',
+                args: {
+                    action: 'spawn_location',
+                    name: 'Bree',
+                    locationType: 'village',
+                    npcs: [
+                        { name: 'Barliman Butterbur', role: 'Innkeeper', behavior: 'Means well, forgets much' },
+                        { name: 'Harry Goatleaf', role: 'Gatekeeper', behavior: 'Suspicious of outsiders' }
+                    ],
+                    rooms: [
+                        { name: 'The Prancing Pony', description: 'A famous inn at the crossroads of Bree, warm and crowded.' },
+                        { name: 'West Gate', description: 'The hedged western gate into the town of Bree.' }
+                    ]
+                }
+            }
+        ],
+        requiredParams: ['worldName', 'fellowshipName']
+    },
+
+    // Combat encounter: a richer two-step variant of setup_encounter — spawn a
+    // preset encounter against the party, then read the party's current context
+    // so the caller has the party state alongside the new encounter. Both steps
+    // are verified: spawn_manage `spawn_encounter` (preset + partyId) creates an
+    // encounter, and session_manage `get_context` (partyId) returns party state.
+    'combat_encounter': {
+        name: 'Combat Encounter',
+        description: 'Spawn a preset encounter against the party and fetch the party context for the fight',
+        steps: [
+            { tool: 'spawn_manage', args: { action: 'spawn_encounter', preset: '{{encounterPreset}}', partyId: '{{partyId}}' } },
+            { tool: 'session_manage', args: { action: 'get_context', partyId: '{{partyId}}' } }
+        ],
+        requiredParams: ['partyId', 'encounterPreset']
     }
 };
 
