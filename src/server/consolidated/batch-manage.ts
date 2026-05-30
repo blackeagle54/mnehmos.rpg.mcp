@@ -81,8 +81,14 @@ export const WORKFLOW_TEMPLATES: Record<string, {
     'start_campaign': {
         name: 'Start Campaign',
         description: 'Create a new world, party, and starting location',
+        // world_manage `generate` requires seed/width/height (GenerateSchema). The
+        // previous template omitted width/height and left seed as an unsupplied
+        // {{seed}} param, so the step ALWAYS failed validation — a failure that
+        // was silently masked while the executor mis-parsed every result as
+        // { raw: text } (fake success). With the result parser fixed, the step
+        // is supplied valid defaults so the workflow runs end to end.
         steps: [
-            { tool: 'world_manage', args: { action: 'generate', name: '{{worldName}}', seed: '{{seed}}' } },
+            { tool: 'world_manage', args: { action: 'generate', seed: '{{worldName}}', width: 50, height: 50 } },
             { tool: 'party_manage', args: { action: 'create', name: '{{partyName}}' } },
             { tool: 'spawn_manage', args: { action: 'spawn_preset_location', preset: 'generic_tavern' } }
         ],
@@ -462,15 +468,25 @@ async function handleExecuteWorkflow(input: BatchManageInput, _ctx: SessionConte
     }
 
     // Substitute template {{param}} placeholders with the caller's params BEFORE
-    // execution. (Inter-step {{stepId.prop}} references are resolved later by the
-    // shared executor during the run.)
+    // execution. Only placeholders that name an ACTUAL caller param are
+    // substituted here; anything else (notably inter-step {{stepId.prop}}
+    // references) is left intact so the shared executor can resolve it later
+    // during the run. Previously this pass clobbered EVERY `{{...}}` string,
+    // turning inter-step references into `undefined` before the executor ever
+    // saw them — so cross-step passing never worked through the workflow path.
     const resolvedSteps = template.steps.map(step => {
         const resolvedArgs: Record<string, any> = {};
         for (const [key, value] of Object.entries(step.args)) {
-            if (typeof value === 'string' && value.startsWith('{{') && value.endsWith('}}')) {
-                const paramName = value.slice(2, -2);
-                resolvedArgs[key] = params[paramName];
+            if (
+                typeof value === 'string' &&
+                value.startsWith('{{') &&
+                value.endsWith('}}') &&
+                Object.prototype.hasOwnProperty.call(params, value.slice(2, -2))
+            ) {
+                resolvedArgs[key] = params[value.slice(2, -2)];
             } else {
+                // Literal value OR an inter-step {{stepId.prop}} reference: pass
+                // through untouched for the executor to resolve.
                 resolvedArgs[key] = value;
             }
         }
@@ -638,37 +654,51 @@ function resolveStepReferences(
     args: Record<string, unknown>,
     stepResults: Map<string, unknown>
 ): Record<string, unknown> {
-    const resolved: Record<string, unknown> = {};
+    return resolveValue(args, stepResults) as Record<string, unknown>;
+}
 
-    for (const [key, value] of Object.entries(args)) {
-        if (typeof value === 'string' && value.startsWith('{{') && value.endsWith('}}')) {
-            // Extract reference like "step1.characterId" or "step1.created[0].id"
-            const refPath = value.slice(2, -2).trim();
-            const dotIndex = refPath.indexOf('.');
-            if (dotIndex > 0) {
-                const stepId = refPath.slice(0, dotIndex);
-                const propertyPath = refPath.slice(dotIndex + 1);
+/**
+ * Resolve {{stepId.property}} references inside any value, preserving structure.
+ *
+ * Arrays must stay arrays — the previous implementation rebuilt every object
+ * (including arrays) via Object.entries into a plain object, turning
+ * `distributions: [ {...} ]` into `distributions: { "0": {...} }` and breaking
+ * downstream Zod array schemas. This walker keeps arrays as arrays and only
+ * substitutes string values that are pure `{{...}}` references.
+ */
+function resolveValue(value: unknown, stepResults: Map<string, unknown>): unknown {
+    if (typeof value === 'string' && value.startsWith('{{') && value.endsWith('}}')) {
+        // Extract reference like "step1.characterId" or "step1.created[0].id"
+        const refPath = value.slice(2, -2).trim();
+        const dotIndex = refPath.indexOf('.');
+        if (dotIndex > 0) {
+            const stepId = refPath.slice(0, dotIndex);
+            const propertyPath = refPath.slice(dotIndex + 1);
 
-                const stepResult = stepResults.get(stepId);
-                if (stepResult) {
-                    // Navigate the property path
-                    resolved[key] = getNestedValue(stepResult as Record<string, unknown>, propertyPath);
-                } else {
-                    // Reference not found, keep original
-                    resolved[key] = value;
-                }
-            } else {
-                resolved[key] = value;
+            const stepResult = stepResults.get(stepId);
+            if (stepResult) {
+                // Navigate the property path (supports array indexing like created[0].id)
+                return getNestedValue(stepResult as Record<string, unknown>, propertyPath);
             }
-        } else if (typeof value === 'object' && value !== null) {
-            // Recursively resolve nested objects
-            resolved[key] = resolveStepReferences(value as Record<string, unknown>, stepResults);
-        } else {
-            resolved[key] = value;
+            // Reference not found, keep original
+            return value;
         }
+        return value;
     }
 
-    return resolved;
+    if (Array.isArray(value)) {
+        return value.map(item => resolveValue(item, stepResults));
+    }
+
+    if (typeof value === 'object' && value !== null) {
+        const resolved: Record<string, unknown> = {};
+        for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+            resolved[key] = resolveValue(child, stepResults);
+        }
+        return resolved;
+    }
+
+    return value;
 }
 
 /**
@@ -685,6 +715,27 @@ function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
     }
 
     return current;
+}
+
+/**
+ * Extract the JSON payload that RichFormatter.embedJson writes into tool output.
+ *
+ * Tools emit `<!-- <TAG>_JSON\n{...}\n<TAG>_JSON -->` (e.g. PARTY_MANAGE_JSON,
+ * CHARACTER_MANAGE_JSON, BATCH_MANAGE_JSON). This is the inverse of
+ * RichFormatter.embedJson and matches the canonical extraction regex already
+ * used elsewhere in the codebase (e.g. combat-map.ts), tying the opening and
+ * closing tags via a backreference so a partial/garbled envelope won't match.
+ *
+ * Returns the parsed object, or undefined when there is no parseable envelope.
+ */
+function extractEmbeddedJson(text: string): unknown {
+    const match = text.match(/<!-- (\w+_JSON)\n([\s\S]*?)\n\1 -->/);
+    if (!match) return undefined;
+    try {
+        return JSON.parse(match[2]);
+    } catch {
+        return undefined;
+    }
 }
 
 /** A single tool step to dispatch through the shared executor. */
@@ -769,29 +820,32 @@ async function runSteps(
             // Execute the tool
             const response = await toolEntry.handler(resolvedArgs, ctx);
 
-            // Parse the result from the response
+            // Parse the result from the response. Tools embed their structured
+            // payload via RichFormatter.embedJson as `<!-- <TAG>_JSON\n{...}\n<TAG>_JSON -->`
+            // (e.g. PARTY_MANAGE_JSON). Reuse the shared extractor so step results
+            // become the REAL parsed object — this is what lets resolveStepReferences /
+            // getNestedValue read fields like `created[0].id` for {{stepId.property}}
+            // cross-step passing. Falling back to { raw } only when there is no
+            // parseable envelope.
             let result: unknown = null;
-            if (response.content?.[0]?.text) {
-                // Try to extract JSON from embedded data
-                const text = response.content[0].text;
-                const jsonMatch = text.match(/<!--JSON:([^>]+)-->/);
-                if (jsonMatch) {
-                    try {
-                        result = JSON.parse(jsonMatch[1]);
-                    } catch {
-                        // Use raw text if JSON parsing fails
-                        result = { raw: text };
-                    }
-                } else {
-                    result = { raw: text };
-                }
+            const text = response.content?.[0]?.text;
+            if (text) {
+                const embedded = extractEmbeddedJson(text);
+                result = embedded !== undefined ? embedded : { raw: text };
             }
 
             // Store result for reference by later steps
             stepResults.set(stepId, result);
 
-            const success = !(result as Record<string, unknown> | null)?.error;
-            output += success ? `  ✅ Success\n` : `  ⚠️ Completed with warnings\n`;
+            // A step is FAILED if its parsed result reports failure via EITHER
+            // convention: `error` truthy OR `success === false`. Handlers in this
+            // file return `{ success: false, errors: [...] }` on partial failure
+            // without an `error` field, so checking only `error` (the old
+            // `!(result?.error)`) silently counted those as successful and never
+            // tripped stopOnError. (CodeRabbit Major @793-794.)
+            const resObj = result as Record<string, unknown> | null;
+            const success = !resObj?.error && resObj?.success !== false;
+            output += success ? `  ✅ Success\n` : `  ⚠️ Step reported failure\n`;
 
             executedSteps.push({
                 stepIndex: i,
@@ -800,6 +854,14 @@ async function runSteps(
                 success,
                 result
             });
+
+            // Honor stopOnError for steps that completed but reported failure
+            // (not just steps that threw). Without this, a `{ success: false }`
+            // step would let later steps run even though stopOnError is true.
+            if (!success && stopOnError) {
+                output += `\n*Execution stopped due to error (stopOnError=true)*\n`;
+                break;
+            }
 
         } catch (err: unknown) {
             const error = (err instanceof Error ? err.message : String(err)) || 'Unknown error';

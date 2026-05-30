@@ -522,6 +522,230 @@ describe('batch_manage consolidated tool', () => {
             const created = partyRepo.findAll().find(p => p.name === 'SubstitutedPartyName');
             expect(created).toBeDefined();
         });
+
+        // CodeRabbit nitpick: cover inter-step {{stepId.property}} resolution
+        // through the autoExecute workflow path (not just execute_sequence).
+        it('inter-step {{stepId.property}} reference resolves during autoExecute', async () => {
+            const INTERSTEP_ID = '__test_interstep_workflow__';
+            // Step 0 creates a party (embeds party.id); step 1 looks it up by
+            // {{step1.party.id}}. The default per-step id is `step{n}` (1-based),
+            // so step 0's id is `step1`. If the parser feeds real fields, the
+            // lookup resolves and step 1 succeeds; otherwise party_manage `get`
+            // throws "Party not found".
+            WORKFLOW_TEMPLATES[INTERSTEP_ID] = {
+                name: 'Inter-step Reference Workflow',
+                description: 'step 1 creates a party, step 2 reads it back via {{step1.party.id}}',
+                steps: [
+                    { tool: 'party_manage', args: { action: 'create', name: 'InterStepParty' } },
+                    { tool: 'party_manage', args: { action: 'get', partyId: '{{step1.party.id}}' } }
+                ],
+                requiredParams: []
+            };
+            try {
+                const result = await handleBatchManage({
+                    action: 'execute_workflow',
+                    templateId: INTERSTEP_ID,
+                    autoExecute: true,
+                    stopOnError: true
+                }, ctx);
+
+                const data = parseResult(result);
+                expect(data.actionType).toBe('execute_sequence');
+                expect(data.executedSteps).toBe(2);
+                expect(data.failureCount).toBe(0);
+                // Step 2's get returned the SAME party created in step 1.
+                expect(data.stepResults.step2.id).toBe(data.stepResults.step1.party.id);
+                expect(data.stepResults.step2.name).toBe('InterStepParty');
+            } finally {
+                delete WORKFLOW_TEMPLATES[INTERSTEP_ID];
+            }
+        });
+    });
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // PR #42 fold-in: shared runSteps executor correctness
+    // (CodeRabbit Major @793-794 + the PR-1 author's parser-limitation flag)
+    //
+    //   1. The result parser must read the REAL embed envelope
+    //      `<!-- <TAG>_JSON\n{...}\n<TAG>_JSON -->` that tools emit (e.g.
+    //      PARTY_MANAGE_JSON) — NOT the never-matching `<!--JSON:...-->` form.
+    //      Without this every step result is `{ raw: text }` and
+    //      `{{stepId.property}}` cross-step passing silently resolves to nothing.
+    //
+    //   2. Failure detection: a step is FAILED when its parsed result has
+    //      `error` truthy OR `success === false` (handlers in batch-manage.ts
+    //      return `{ success:false, errors:[...] }` on partial failure with NO
+    //      `error` field). Either must trip stopOnError and halt later steps.
+    // ─────────────────────────────────────────────────────────────────────────
+    describe('runSteps executor correctness (PR #42 fold-in)', () => {
+        it('parses the real <TAG>_JSON embed: step result is the parsed object, not {raw}', async () => {
+            // party_manage create embeds PARTY_MANAGE_JSON: { success, party:{id,name}, ... }
+            const result = await handleBatchManage({
+                action: 'execute_sequence',
+                steps: [
+                    { tool: 'party_manage', args: { action: 'create', name: 'ParsedRealFields' }, id: 'mk' }
+                ]
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.actionType).toBe('execute_sequence');
+            // stepResults must hold the REAL parsed object (party.id present),
+            // proving the parser read the embed instead of falling back to {raw}.
+            const stepResult = data.stepResults.mk;
+            expect(stepResult).toBeDefined();
+            expect(stepResult.raw).toBeUndefined();
+            expect(stepResult.party).toBeDefined();
+            expect(typeof stepResult.party.id).toBe('string');
+            expect(stepResult.party.id.length).toBeGreaterThan(0);
+        });
+
+        it('{{stepId.property}} cross-step passing feeds the REAL id to the next tool', async () => {
+            // Step A creates a party (embeds party.id). Step B looks it up via
+            // {{A.party.id}}. If the parser feeds real fields, the lookup resolves
+            // and step B succeeds; if it were still {raw}, the ref would be
+            // unresolved and party_manage `get` would throw "Party not found".
+            const result = await handleBatchManage({
+                action: 'execute_sequence',
+                stopOnError: true,
+                steps: [
+                    { tool: 'party_manage', args: { action: 'create', name: 'CrossStepParty' }, id: 'A' },
+                    { tool: 'party_manage', args: { action: 'get', partyId: '{{A.party.id}}' }, id: 'B' }
+                ]
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.actionType).toBe('execute_sequence');
+            // Both steps ran and both succeeded → the id resolved to a real party.
+            expect(data.executedSteps).toBe(2);
+            expect(data.failureCount).toBe(0);
+            expect(data.steps[1].success).toBe(true);
+            // Step B's resolved get returned the SAME party we created in step A.
+            expect(data.stepResults.B.id).toBe(data.stepResults.A.party.id);
+            expect(data.stepResults.B.name).toBe('CrossStepParty');
+        });
+
+        it('{success:false} (no error field) + stopOnError:true → HALTS, step failed, later steps skipped', async () => {
+            // batch_manage distribute_items to a non-existent character returns
+            // { success:false, errors:[...] } with NO `error` field (see
+            // handleDistributeItems). The OLD `!(result?.error)` check would mark
+            // this "success"; the fix must treat success===false as failure.
+            const result = await handleBatchManage({
+                action: 'execute_sequence',
+                stopOnError: true,
+                steps: [
+                    {
+                        tool: 'batch_manage',
+                        args: {
+                            action: 'distribute_items',
+                            distributions: [{ characterId: 'no-such-character', items: ['Anything'] }]
+                        },
+                        id: 'fails'
+                    },
+                    { tool: 'party_manage', args: { action: 'create', name: 'MustNotBeCreated' }, id: 'after' }
+                ]
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.actionType).toBe('execute_sequence');
+            expect(data.success).toBe(false);
+            expect(data.failureCount).toBeGreaterThan(0);
+            // Only the failing step ran; the later party step was skipped.
+            expect(data.executedSteps).toBe(1);
+            expect(data.steps).toHaveLength(1);
+            expect(data.steps[0].success).toBe(false);
+
+            const text = result.content[0].text;
+            expect(text).toContain('Execution stopped due to error');
+
+            // The later party step did not run → no such party in the DB.
+            const db = getDb(':memory:');
+            const partyRepo = new PartyRepository(db);
+            const names = partyRepo.findAll().map(p => p.name);
+            expect(names).not.toContain('MustNotBeCreated');
+        });
+
+        it('{success:false} + stopOnError:false → step still recorded failed, later steps run', async () => {
+            const result = await handleBatchManage({
+                action: 'execute_sequence',
+                stopOnError: false,
+                steps: [
+                    {
+                        tool: 'batch_manage',
+                        args: {
+                            action: 'distribute_items',
+                            distributions: [{ characterId: 'no-such-character', items: ['Anything'] }]
+                        },
+                        id: 'fails'
+                    },
+                    { tool: 'party_manage', args: { action: 'create', name: 'RunsAnyway' }, id: 'after' }
+                ]
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.executedSteps).toBe(2);
+            expect(data.steps[0].success).toBe(false);
+            expect(data.steps[1].success).toBe(true);
+            expect(data.failureCount).toBe(1);
+
+            const db = getDb(':memory:');
+            const partyRepo = new PartyRepository(db);
+            const names = partyRepo.findAll().map(p => p.name);
+            expect(names).toContain('RunsAnyway');
+        });
+
+        it('a genuinely successful step is still recorded as success', async () => {
+            const result = await handleBatchManage({
+                action: 'execute_sequence',
+                steps: [
+                    { tool: 'party_manage', args: { action: 'create', name: 'HappyPath' }, id: 'ok' }
+                ]
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.failureCount).toBe(0);
+            expect(data.successCount).toBe(1);
+            expect(data.steps[0].success).toBe(true);
+        });
+
+        it('autoExecute workflow with a {success:false} step halts under stopOnError', async () => {
+            const FAIL_SF_ID = '__test_success_false_workflow__';
+            WORKFLOW_TEMPLATES[FAIL_SF_ID] = {
+                name: 'Success-False Workflow',
+                description: 'first step returns {success:false}, second must not run',
+                steps: [
+                    {
+                        tool: 'batch_manage',
+                        args: {
+                            action: 'distribute_items',
+                            distributions: [{ characterId: 'no-such-character', items: ['Anything'] }]
+                        }
+                    },
+                    { tool: 'party_manage', args: { action: 'create', name: 'WorkflowMustNotRun' } }
+                ],
+                requiredParams: []
+            };
+            try {
+                const result = await handleBatchManage({
+                    action: 'execute_workflow',
+                    templateId: FAIL_SF_ID,
+                    autoExecute: true,
+                    stopOnError: true
+                }, ctx);
+
+                const data = parseResult(result);
+                expect(data.actionType).toBe('execute_sequence');
+                expect(data.success).toBe(false);
+                expect(data.executedSteps).toBe(1);
+                expect(data.failureCount).toBeGreaterThan(0);
+
+                const db = getDb(':memory:');
+                const partyRepo = new PartyRepository(db);
+                const names = partyRepo.findAll().map(p => p.name);
+                expect(names).not.toContain('WorkflowMustNotRun');
+            } finally {
+                delete WORKFLOW_TEMPLATES[FAIL_SF_ID];
+            }
+        });
     });
 
     describe('list_templates action', () => {
