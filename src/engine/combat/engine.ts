@@ -2,6 +2,23 @@ import { CombatRNG, CheckResult } from './rng.js';
 import { Condition, ConditionType, DurationType, Ability, CONDITION_EFFECTS } from './conditions.js';
 
 import { SizeCategory, GridBounds } from '../../schema/encounter.js';
+import { determineCover, CoverLevel } from '../spatial/combat-grid.js';
+
+/**
+ * Cover -> effective-AC bonus mapping (tile-based D&D 5e simplification).
+ * 'full' is handled separately: a target behind full cover cannot be hit at all.
+ */
+const COVER_AC_BONUS: Record<Exclude<CoverLevel, 'full'>, number> = {
+    none: 0,
+    half: 2,
+    three_quarter: 5,
+};
+
+/** Human-readable label for the attack breakdown. */
+const COVER_LABEL: Record<Exclude<CoverLevel, 'none' | 'full'>, string> = {
+    half: 'half cover',
+    three_quarter: 'three-quarter cover',
+};
 
 /**
  * Character interface for combat participants
@@ -616,8 +633,26 @@ export class CombatEngine {
 
         const hpBefore = target.hp;
 
-        // Roll with full transparency
-        const attackRoll = this.rng.checkDegreeDetailed(attackBonus, dc);
+        // ── Cover resolution ──────────────────────────────────────────────
+        // Apply cover ONLY when both combatants are positioned AND the encounter
+        // has cover props. Otherwise cover is 'none' and behavior is identical to
+        // legacy (this is what keeps the existing suite green). We compute an
+        // effective DC locally and NEVER mutate target.ac.
+        let cover: CoverLevel = 'none';
+        if (actor.position && target.position && this.state.props && this.state.props.length > 0) {
+            cover = determineCover(this.state, actor.position, target.position);
+        }
+        const coverIsFull = cover === 'full';
+        const coverAcBonus = cover === 'full' ? 0 : COVER_AC_BONUS[cover];
+        const effectiveDc = dc + coverAcBonus;
+
+        // Roll with full transparency (against the cover-adjusted effective AC).
+        const rawRoll = this.rng.checkDegreeDetailed(attackBonus, effectiveDc);
+        // Full cover: the target is not a valid target — the attack cannot hit,
+        // regardless of the roll (D&D 5e). Force a clean miss without mutating HP.
+        const attackRoll: CheckResult = coverIsFull
+            ? { ...rawRoll, degree: 'failure', isHit: false, isCrit: false }
+            : rawRoll;
 
         let damageDealt = 0;
         let damageModifier: 'immune' | 'resistant' | 'vulnerable' | 'normal' = 'normal';
@@ -649,8 +684,15 @@ export class CombatEngine {
 
         const defeated = target.hp <= 0;
 
-        // Build detailed breakdown
-        let breakdown = `🎲 Attack Roll: d20(${attackRoll.roll}) + ${attackBonus} = ${attackRoll.total} vs AC ${dc}\n`;
+        // Build detailed breakdown. When cover applies, surface the effective AC
+        // and the cover annotation honestly (e.g. "vs AC 17 (+2 half cover)").
+        let acText = `AC ${effectiveDc}`;
+        if (cover === 'full') {
+            acText = `AC ${dc} (behind full cover — cannot be hit)`;
+        } else if (cover !== 'none') {
+            acText = `AC ${effectiveDc} (+${coverAcBonus} ${COVER_LABEL[cover]})`;
+        }
+        let breakdown = `🎲 Attack Roll: d20(${attackRoll.roll}) + ${attackBonus} = ${attackRoll.total} vs ${acText}\n`;
 
         if (attackRoll.isNat20) {
             breakdown += `   ⭐ NATURAL 20!\n`;
@@ -659,6 +701,9 @@ export class CombatEngine {
         }
 
         breakdown += `   ${attackRoll.isHit ? '✅ HIT' : '❌ MISS'}`;
+        if (coverIsFull) {
+            breakdown += ` — target is behind full cover and cannot be hit`;
+        }
 
         if (attackRoll.isHit) {
             breakdown += attackRoll.isCrit ? ' (CRITICAL!)' : '';
