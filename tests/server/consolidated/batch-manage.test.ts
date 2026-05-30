@@ -1070,20 +1070,28 @@ describe('batch_manage consolidated tool', () => {
             }));
 
             // The input schema caps steps at 10 (z.array(...).max(10)), so the call
-            // is rejected at parse time. Either surfacing path (thrown ZodError or
-            // an error envelope) proves "no execution"; we assert nothing ran.
-            let threw = false;
+            // is rejected at parse time. The rejection surfaces one of two ways:
+            // the Zod `.max(10)` schema THROWS before runSteps, OR a caller converts
+            // it into an error:true envelope. We capture WHICH happened without
+            // swallowing assertion failures, then assert the rejection definitively.
+            // The earlier form (`expect(threw || true).toBe(true)` with the inner
+            // `expect(data.error)` inside the try) was a tautology that also hid the
+            // assertion — it passed even if the cap were broken. This form FAILS if
+            // an 11-step sequence is accepted and executed: a non-error envelope
+            // leaves rejected=false and data.error falsy, so the expect below trips.
+            let rejected = false;
+            let data: any = null;
             try {
-                const result = await handleBatchManage({
+                data = parseResult(await handleBatchManage({
                     action: 'execute_sequence',
                     steps: elevenSteps
-                }, ctx);
-                const data = parseResult(result);
-                expect(data.error).toBeTruthy();
+                }, ctx));
             } catch {
-                threw = true;
+                rejected = true;
             }
-            expect(threw || true).toBe(true);
+            // Rejected via a thrown ZodError, OR returned an error envelope — but
+            // NOT silently accepted as a successful run.
+            expect(rejected || data?.error).toBeTruthy();
 
             // No party from the over-cap sequence was created.
             const db = getDb(':memory:');
