@@ -3,10 +3,18 @@
  * Validates all 6 actions: create_characters, create_npcs, distribute_items, execute_workflow, list_templates, get_template
  */
 
-import { handleBatchManage, BatchManageTool } from '../../../src/server/consolidated/batch-manage.js';
+// Import the consolidated barrel FIRST so the full ConsolidatedTools array is
+// initialized before buildConsolidatedRegistry() runs (the execute_sequence /
+// auto-execute paths build the registry; importing batch-manage in isolation
+// would otherwise hit a circular-load partial array).
+import { ConsolidatedTools } from '../../../src/server/consolidated/index.js';
+import { handleBatchManage, BatchManageTool, WORKFLOW_TEMPLATES } from '../../../src/server/consolidated/batch-manage.js';
 import { getDb, closeDb } from '../../../src/storage/index.js';
 import { CharacterRepository } from '../../../src/storage/repos/character.repo.js';
+import { PartyRepository } from '../../../src/storage/repos/party.repo.js';
 import { randomUUID } from 'crypto';
+
+void ConsolidatedTools;
 
 process.env.NODE_ENV = 'test';
 
@@ -375,6 +383,144 @@ describe('batch_manage consolidated tool', () => {
 
             const data = parseResult(result);
             expect(data.actionType).toBe('execute_workflow');
+        });
+    });
+
+    describe('execute_workflow autoExecute (Phase 6 PR-1)', () => {
+        // RED test 3 registers a transient template with an intentionally failing
+        // (unknown-tool) step; clean it up so it never leaks into other tests.
+        const FAILING_TEMPLATE_ID = '__test_failing_workflow__';
+        afterEach(() => {
+            delete WORKFLOW_TEMPLATES[FAILING_TEMPLATE_ID];
+        });
+
+        it('autoExecute:true actually EXECUTES the steps (real per-step results + DB writes)', async () => {
+            const result = await handleBatchManage({
+                action: 'execute_workflow',
+                templateId: 'start_campaign',
+                params: { worldName: 'Faerun', partyName: 'Heroes of Neverwinter' },
+                autoExecute: true
+            }, ctx);
+
+            const data = parseResult(result);
+            // Routed through the shared sequence engine, NOT prepare-only.
+            expect(data.actionType).toBe('execute_sequence');
+            expect(data.autoExecuted).toBe(true);
+            // Real per-step execution records (not just resolved arg specs).
+            expect(Array.isArray(data.steps)).toBe(true);
+            expect(data.steps.length).toBe(3);
+            expect(data.steps[0]).toHaveProperty('stepIndex');
+            expect(data.steps[0]).toHaveProperty('result');
+            // It must NOT be the prepare-only message.
+            const text = result.content[0].text;
+            expect(text).not.toContain('prepared but not auto-executed');
+
+            // Side effect in the in-memory DB: the party step actually created the party.
+            const db = getDb(':memory:');
+            const partyRepo = new PartyRepository(db);
+            const names = partyRepo.findAll().map(p => p.name);
+            expect(names).toContain('Heroes of Neverwinter');
+        });
+
+        it('without autoExecute → unchanged prepare-only behavior (nothing executed)', async () => {
+            const result = await handleBatchManage({
+                action: 'execute_workflow',
+                templateId: 'start_campaign',
+                params: { worldName: 'Faerun', partyName: 'Prep Only Party' }
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.actionType).toBe('execute_workflow');
+            expect(data.message).toBe('Workflow prepared. Execute steps manually.');
+            // Resolved arg specs returned, NOT executed-step records.
+            expect(data.steps[0]).toHaveProperty('tool');
+            expect(data.steps[0]).not.toHaveProperty('result');
+
+            const text = result.content[0].text;
+            expect(text).toContain('prepared but not auto-executed');
+
+            // No DB side effects: the party was NOT created.
+            const db = getDb(':memory:');
+            const partyRepo = new PartyRepository(db);
+            const names = partyRepo.findAll().map(p => p.name);
+            expect(names).not.toContain('Prep Only Party');
+        });
+
+        it('autoExecute:false explicitly → still prepare-only', async () => {
+            const result = await handleBatchManage({
+                action: 'execute_workflow',
+                templateId: 'start_campaign',
+                params: { worldName: 'Faerun', partyName: 'Explicit False' },
+                autoExecute: false
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.actionType).toBe('execute_workflow');
+            expect(data.message).toBe('Workflow prepared. Execute steps manually.');
+
+            const db = getDb(':memory:');
+            const partyRepo = new PartyRepository(db);
+            const names = partyRepo.findAll().map(p => p.name);
+            expect(names).not.toContain('Explicit False');
+        });
+
+        it('autoExecute:true + failing step + stopOnError:true → halts and surfaces the error, later steps do not run', async () => {
+            // Transient template: a guaranteed-failing first step (unknown tool),
+            // then a party_manage step that must NOT run if execution halts.
+            WORKFLOW_TEMPLATES[FAILING_TEMPLATE_ID] = {
+                name: 'Failing Workflow',
+                description: 'first step fails, second must not run',
+                steps: [
+                    { tool: 'definitely_not_a_real_tool', args: { action: 'noop' } },
+                    { tool: 'party_manage', args: { action: 'create', name: 'ShouldNeverExist' } }
+                ],
+                requiredParams: []
+            };
+
+            const result = await handleBatchManage({
+                action: 'execute_workflow',
+                templateId: FAILING_TEMPLATE_ID,
+                autoExecute: true,
+                stopOnError: true
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.actionType).toBe('execute_sequence');
+            expect(data.success).toBe(false);
+            expect(data.failureCount).toBeGreaterThan(0);
+            // Only the failing step ran; the party step was skipped.
+            expect(data.executedSteps).toBe(1);
+            expect(data.steps).toHaveLength(1);
+            expect(data.steps[0].success).toBe(false);
+            expect(data.steps[0].error).toContain('Unknown tool');
+
+            const text = result.content[0].text;
+            expect(text).toContain('Execution stopped due to error');
+
+            // The later party step did not run → no such party in the DB.
+            const db = getDb(':memory:');
+            const partyRepo = new PartyRepository(db);
+            const names = partyRepo.findAll().map(p => p.name);
+            expect(names).not.toContain('ShouldNeverExist');
+        });
+
+        it('template {{param}} substitution flows into the EXECUTED step args', async () => {
+            const result = await handleBatchManage({
+                action: 'execute_workflow',
+                templateId: 'start_campaign',
+                params: { worldName: 'Faerun', partyName: 'SubstitutedPartyName' },
+                autoExecute: true
+            }, ctx);
+
+            const data = parseResult(result);
+            expect(data.actionType).toBe('execute_sequence');
+
+            // The party_manage step received the substituted {{partyName}} value:
+            // assert the dispatched tool actually created a party with that exact name.
+            const db = getDb(':memory:');
+            const partyRepo = new PartyRepository(db);
+            const created = partyRepo.findAll().find(p => p.name === 'SubstitutedPartyName');
+            expect(created).toBeDefined();
         });
     });
 

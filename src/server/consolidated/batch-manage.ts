@@ -69,7 +69,10 @@ function ensureDb() {
 }
 
 // Workflow templates
-const WORKFLOW_TEMPLATES: Record<string, {
+// Exported so tests can register transient templates (e.g. an intentionally
+// failing step) to exercise the auto-execute path without polluting the
+// built-in template set at runtime.
+export const WORKFLOW_TEMPLATES: Record<string, {
     name: string;
     description: string;
     steps: Array<{ tool: string; args: Record<string, any> }>;
@@ -156,6 +159,8 @@ const BatchManageInputSchema = z.object({
     // workflow fields
     templateId: z.string().optional().describe('Workflow template ID'),
     params: z.record(z.string(), z.any()).optional().describe('Template parameters'),
+    autoExecute: z.boolean().optional().default(false)
+        .describe('execute_workflow: if true, actually run the resolved steps through the sequence engine. Default false = prepare-only (returns resolved steps without running them).'),
 
     // execute_sequence fields
     steps: z.array(z.object({
@@ -456,7 +461,9 @@ async function handleExecuteWorkflow(input: BatchManageInput, _ctx: SessionConte
         };
     }
 
-    // Substitute parameters in steps
+    // Substitute template {{param}} placeholders with the caller's params BEFORE
+    // execution. (Inter-step {{stepId.prop}} references are resolved later by the
+    // shared executor during the run.)
     const resolvedSteps = template.steps.map(step => {
         const resolvedArgs: Record<string, any> = {};
         for (const [key, value] of Object.entries(step.args)) {
@@ -469,6 +476,46 @@ async function handleExecuteWorkflow(input: BatchManageInput, _ctx: SessionConte
         }
         return { tool: step.tool, args: resolvedArgs };
     });
+
+    // Opt-in auto-execute: route the resolved steps through the SAME engine
+    // execute_sequence uses. Default (autoExecute=false) preserves the original
+    // prepare-only / dry-run behavior for backward compatibility.
+    if (input.autoExecute) {
+        const stopOnError = input.stopOnError ?? true;
+
+        let output = RichFormatter.header(`Workflow: ${template.name}`, '⚙️');
+        output += `*${template.description}*\n\n`;
+        output += `*Auto-executing ${resolvedSteps.length} step(s)...*\n\n`;
+
+        const run = await runSteps(resolvedSteps as RunnableStep[], _ctx, { stopOnError });
+        output += run.output;
+
+        output += RichFormatter.section('Summary');
+        output += RichFormatter.keyValue({
+            'Total Steps': resolvedSteps.length,
+            'Executed': run.executedSteps.length,
+            'Succeeded': run.successCount,
+            'Failed': run.failureCount
+        });
+
+        const resultPayload = {
+            success: run.failureCount === 0,
+            actionType: 'execute_sequence',
+            templateId: input.templateId,
+            templateName: template.name,
+            autoExecuted: true,
+            totalSteps: resolvedSteps.length,
+            executedSteps: run.executedSteps.length,
+            successCount: run.successCount,
+            failureCount: run.failureCount,
+            steps: run.executedSteps,
+            stepResults: Object.fromEntries(run.stepResults)
+        };
+
+        output += RichFormatter.embedJson(resultPayload, 'BATCH_MANAGE');
+
+        return { content: [{ type: 'text', text: output }] };
+    }
 
     let output = RichFormatter.header(`Workflow: ${template.name}`, '⚙️');
     output += `*${template.description}*\n\n`;
@@ -640,39 +687,61 @@ function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
     return current;
 }
 
-async function handleExecuteSequence(input: BatchManageInput, ctx: SessionContext): Promise<McpResponse> {
-    if (!input.steps || input.steps.length === 0) {
-        return {
-            content: [{
-                type: 'text',
-                text: RichFormatter.error('execute_sequence requires steps array') +
-                    RichFormatter.embedJson({ error: true, message: 'steps required' }, 'BATCH_MANAGE')
-            }]
-        };
-    }
+/** A single tool step to dispatch through the shared executor. */
+interface RunnableStep {
+    tool: string;
+    args: Record<string, unknown>;
+    id?: string;
+}
 
+/** Per-step outcome recorded by the shared executor. */
+interface ExecutedStepRecord {
+    stepIndex: number;
+    stepId: string;
+    tool: string;
+    success: boolean;
+    result?: unknown;
+    error?: string;
+}
+
+/** Aggregate outcome of running a list of steps. */
+interface RunStepsResult {
+    /** Human-readable progress log (per-step lines). */
+    output: string;
+    executedSteps: ExecutedStepRecord[];
+    stepResults: Map<string, unknown>;
+    successCount: number;
+    failureCount: number;
+}
+
+/**
+ * Shared step executor used by BOTH `execute_sequence` and the
+ * `execute_workflow` auto-execute path.
+ *
+ * Builds the consolidated tool registry, dispatches each step's tool handler,
+ * threads results between steps via {{stepId.property}} resolution, and honors
+ * `stopOnError`. This is the single source of truth for sequence execution —
+ * `handleExecuteSequence` and `handleExecuteWorkflow(autoExecute)` both call it
+ * so behavior cannot drift between the two entry points.
+ */
+async function runSteps(
+    steps: RunnableStep[],
+    ctx: SessionContext,
+    options: { stopOnError: boolean }
+): Promise<RunStepsResult> {
     const registry = buildConsolidatedRegistry();
-    const stopOnError = input.stopOnError ?? true;
+    const { stopOnError } = options;
 
     const stepResults = new Map<string, unknown>();
-    const executedSteps: Array<{
-        stepIndex: number;
-        stepId: string;
-        tool: string;
-        success: boolean;
-        result?: unknown;
-        error?: string;
-    }> = [];
+    const executedSteps: ExecutedStepRecord[] = [];
+    let output = '';
 
-    let output = RichFormatter.header('Executing Sequence', '⚙️');
-    output += `*${input.steps.length} step(s) to execute*\n\n`;
-
-    for (let i = 0; i < input.steps.length; i++) {
-        const step = input.steps[i];
+    for (let i = 0; i < steps.length; i++) {
+        const step = steps[i];
         const stepId = step.id || `step${i + 1}`;
         const toolEntry = registry[step.tool];
 
-        output += `**Step ${i + 1}/${input.steps.length}**: \`${step.tool}\`\n`;
+        output += `**Step ${i + 1}/${steps.length}**: \`${step.tool}\`\n`;
 
         if (!toolEntry) {
             const error = `Unknown tool: ${step.tool}`;
@@ -754,23 +823,45 @@ async function handleExecuteSequence(input: BatchManageInput, ctx: SessionContex
     const successCount = executedSteps.filter(s => s.success).length;
     const failureCount = executedSteps.filter(s => !s.success).length;
 
+    return { output, executedSteps, stepResults, successCount, failureCount };
+}
+
+async function handleExecuteSequence(input: BatchManageInput, ctx: SessionContext): Promise<McpResponse> {
+    if (!input.steps || input.steps.length === 0) {
+        return {
+            content: [{
+                type: 'text',
+                text: RichFormatter.error('execute_sequence requires steps array') +
+                    RichFormatter.embedJson({ error: true, message: 'steps required' }, 'BATCH_MANAGE')
+            }]
+        };
+    }
+
+    const stopOnError = input.stopOnError ?? true;
+
+    let output = RichFormatter.header('Executing Sequence', '⚙️');
+    output += `*${input.steps.length} step(s) to execute*\n\n`;
+
+    const run = await runSteps(input.steps as RunnableStep[], ctx, { stopOnError });
+    output += run.output;
+
     output += RichFormatter.section('Summary');
     output += RichFormatter.keyValue({
         'Total Steps': input.steps.length,
-        'Executed': executedSteps.length,
-        'Succeeded': successCount,
-        'Failed': failureCount
+        'Executed': run.executedSteps.length,
+        'Succeeded': run.successCount,
+        'Failed': run.failureCount
     });
 
     const resultPayload = {
-        success: failureCount === 0,
+        success: run.failureCount === 0,
         actionType: 'execute_sequence',
         totalSteps: input.steps.length,
-        executedSteps: executedSteps.length,
-        successCount,
-        failureCount,
-        steps: executedSteps,
-        stepResults: Object.fromEntries(stepResults)
+        executedSteps: run.executedSteps.length,
+        successCount: run.successCount,
+        failureCount: run.failureCount,
+        steps: run.executedSteps,
+        stepResults: Object.fromEntries(run.stepResults)
     };
 
     output += RichFormatter.embedJson(resultPayload, 'BATCH_MANAGE');
