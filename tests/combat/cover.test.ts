@@ -22,8 +22,8 @@ describe('Cover applied to attack resolution', () => {
     // We assert on the breakdown text + hit/miss rather than a fixed roll so the
     // intent is clear even if the seed's first roll shifts.
 
-    function buildEngine(props?: CombatState['props']): { engine: CombatEngine; state: CombatState } {
-        const engine = new CombatEngine('cover-test-seed');
+    function buildEngine(props?: CombatState['props'], seed: string = 'cover-test-seed'): { engine: CombatEngine; state: CombatState } {
+        const engine = new CombatEngine(seed);
         const participants: CombatParticipant[] = [
             {
                 id: 'archer', name: 'Archer', initiativeBonus: 0,
@@ -161,6 +161,34 @@ describe('Cover applied to attack resolution', () => {
             expect(result.damage).toBeGreaterThan(0);
             const hpAfter = state.participants.find(p => p.id === 'goblin')!.hp;
             expect(hpAfter).toBeLessThan(hpBefore);
+        });
+
+        // Seed 'cover-flip' rolls a mid value (13, not a nat-20 auto-hit), so a
+        // marginal hit can be flipped to a miss by the +2/+5 cover AC. We read the
+        // bare total, then a SAME-SEED engine with base AC == that total clears AC by
+        // exactly 0; cover pushes the SAME roll under the bar.
+        it('half cover converts a marginal HIT into a MISS (same roll, +2 effective AC)', () => {
+            const bare = buildEngine(undefined, 'cover-flip').engine.executeAttack('archer', 'goblin', 5, 15, 8);
+            const total = Number(bare.detailedBreakdown.match(/= (\d+) vs AC/)![1]);
+            const { engine } = buildEngine([
+                { id: 'crate', position: '3,0', label: 'Crate', propType: 'cover', cover: 'half' }
+            ], 'cover-flip');
+            const covered = engine.executeAttack('archer', 'goblin', 5, total, 8); // base AC == total
+            expect(covered.success).toBe(false); // total < total + 2
+            expect(covered.damage).toBe(0);
+            expect(covered.detailedBreakdown).toContain('+2 half cover');
+        });
+
+        it('three-quarter cover converts a marginal HIT into a MISS (same roll, +5 effective AC)', () => {
+            const bare = buildEngine(undefined, 'cover-flip').engine.executeAttack('archer', 'goblin', 5, 15, 8);
+            const total = Number(bare.detailedBreakdown.match(/= (\d+) vs AC/)![1]);
+            const { engine } = buildEngine([
+                { id: 'wall', position: '3,0', label: 'Wall', propType: 'cover', cover: 'three_quarter' }
+            ], 'cover-flip');
+            const covered = engine.executeAttack('archer', 'goblin', 5, total, 8);
+            expect(covered.success).toBe(false); // total < total + 5
+            expect(covered.damage).toBe(0);
+            expect(covered.detailedBreakdown).toContain('three-quarter cover');
         });
     });
 });

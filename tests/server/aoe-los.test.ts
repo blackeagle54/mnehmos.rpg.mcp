@@ -59,7 +59,7 @@ describe('AoE respects line-of-sight', () => {
         expect(names).toContain('Exposed Goblin');
     });
 
-    it('does NOT treat half / three-quarter cover props as LoS blockers for AoE', () => {
+    it('does NOT treat HALF cover props as LoS blockers for AoE', () => {
         const state = buildState([
             { id: 'crate', position: '3,0', label: 'Crate', propType: 'cover', cover: 'half' }
         ]);
